@@ -2,6 +2,23 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.32 - 10/18/2026 --
+
+- AUTO MAPPER: less strict, so it flows. It used to switch to a new pattern every 4 or 5 notes: a pattern from a
+  learned map stopped the moment its rhythm differed a little from the song's, or a move went a little further than
+  the difficulty's comfortable reach, and of thousands of short pieces one always fit a little better by chance than
+  the few long ones. Now a pattern carries on through small rhythm differences (costing for how far it strays instead
+  of stopping), moves may go a bit further before a pattern is cut, and stopping short of where the rhythm lets it go
+  on costs, so the long smooth runs win: patterns now last half as long again (4.5 notes to 6.6 on average, mixed,
+  stream and jump maps at 8 and 10), with a third fewer jumps straight back where the cursor just was
+- AUTO MAPPER: new flow patterns made for exactly the song's rhythm, at any speed: each note goes as far as its timing
+  wants, small moves carry on or turn a right angle, jumps swing round the way the cursor is already turning (the
+  star shapes of human jump maps, round the middle rather than back and forth), a strong sound gets the bigger move
+  and may switch which way it turns, and it never lands back on the cells it was just on. They compete with the
+  learned maps' patterns and now make about a quarter of a map; with no learned rhythm to stray from, they go on as
+  long as the rhythm does
+
+----------------------------------
    -- Plus 3.0.31 - 10/17/2026 --
 
 - AUTO MAPPER: AUTO MAP LIKE THIS MAP (a new slider, under DRAW in PATTERNS, and in MORE OPTIONS as Similar to This

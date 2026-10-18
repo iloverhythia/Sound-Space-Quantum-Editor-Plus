@@ -3549,6 +3549,78 @@ window.SSQEAutoMapper = (function () {
         };
     }
 
+    // Flow made for exactly here, any speed (a stream, jumps, or the two mixed): each note goes about as far as its
+    // timing wants (`wants`, cells), onto the cell that keeps the cursor flowing: small moves carry on or turn a right
+    // angle, jumps swing round the way the cursor is turning (the star shapes of human jump maps, round the middle
+    // rather than back and forth), a strong sound gets the bigger move and may switch which way it turns, and it never
+    // goes back onto the cells it was just on. `seed` picks among the ways that flow equally well.
+    function flowRun(start, before, gaps, wants, acc, seed) {
+        const rnd = seeded(seed);
+        const n = gaps.length + 1;
+        const x = new Float64Array(n), y = new Float64Array(n), t = new Float64Array(n);
+        for (let q = 1; q < n; q++)
+            t[q] = t[q - 1] + gaps[q - 1];
+        x[0] = Math.min(2, Math.max(0, Math.round(start.x)));
+        y[0] = Math.min(2, Math.max(0, Math.round(start.y)));
+        const accs = acc ? Array.from(acc).slice(0, gaps.length) : [];
+        const mean = accs.length ? accs.reduce((p, q) => p + q, 0) / accs.length : 0;
+        const strong = q => accs.length > 0 && accs[q - 1] >= Math.max(0.45, 1.2 * mean);
+        let dx = before ? x[0] - before.x : 0, dy = before ? y[0] - before.y : 0;
+        if (Math.hypot(dx, dy) < 0.05)
+            [dx, dy] = ORTH[Math.floor(rnd() * 4)];
+        let spin = rnd() < 0.5 ? 1 : -1;
+        let lastMove = before ? Math.hypot(x[0] - before.x, y[0] - before.y) : 1;
+        for (let q = 1; q < n; q++) {
+            const px = x[q - 1], py = y[q - 1];
+            const want = Math.min(2.83, Math.max(1, wants[q - 1] * (strong(q) ? 1.15 : 1)));
+            const din = Math.hypot(dx, dy);
+            let best = null;
+            for (let tx = 0; tx <= 2; tx++)
+                for (let ty = 0; ty <= 2; ty++) {
+                    if (tx === px && ty === py)
+                        continue;
+                    const mx = tx - px, my = ty - py, ml = Math.hypot(mx, my);
+                    const turn = Math.atan2(dx * my - dy * mx, dx * mx + dy * my) * 180 / Math.PI, at = Math.abs(turn);
+                    let s = 0.25 * rnd();
+                    // as far as the timing wants
+                    s += 1.4 * Math.abs(Math.log(ml / want));
+                    // (a diagonal step between quick notes isn't how streams go)
+                    if (want < 1.3 && Math.abs(ml - Math.SQRT2) < 0.01)
+                        s += 0.6;
+                    // the turn: steps go on or turn a right angle; jumps swing round, about 110 to 160 degrees
+                    if (want < 1.3)
+                        s += at < 1 ? 0 : at < 100 ? 0.15 : 2;
+                    else if (want < 1.8)
+                        s += at < 45 ? 0.3 : at <= 140 ? 0 : 0.8;
+                    else
+                        s += at >= 100 && at <= 165 ? 0 : at > 165 ? 0.9 : 0.5 + (100 - at) / 100;
+                    // turning the way it has been turning (a spin, a star), the other way only on a strong sound
+                    if (at > 20 && at < 175)
+                        s += Math.sign(turn) === spin ? -0.15 : strong(q) ? 0 : 0.45;
+                    // a sudden change of size where the timing doesn't change is a stumble
+                    if (q >= 2 && Math.abs(gaps[q - 1] - gaps[q - 2]) <= 0.15 * gaps[q - 1])
+                        s += 0.5 * Math.abs(Math.log(ml / Math.max(0.5, lastMove)));
+                    // never back onto the cells it was just on
+                    for (let back = 2; back <= 5 && q - back >= 0; back++)
+                        if (tx === x[q - back] && ty === y[q - back])
+                            s += 2.5 / (back - 1);
+                    if (!best || s < best.s)
+                        best = { tx, ty, mx, my, turn, ml, s };
+                }
+            x[q] = best.tx;
+            y[q] = best.ty;
+            if (Math.abs(best.turn) > 20 && Math.abs(best.turn) < 175)
+                spin = Math.sign(best.turn);
+            dx = best.mx;
+            dy = best.my;
+            lastMove = best.ml;
+        }
+        return {
+            name: 'flow', x, y, t, n, quantum: false, made: true,
+            cleanUntil: new Int32Array(n).fill(n), wholeUntil: new Int32Array(n).fill(n),
+        };
+    }
+
     // One note a comfortable move on from `prev` (for when no run at all can be played there, so the map never just
     // stops): on the grid, or anywhere on the quantum grid with the Quantum option
     function stepNote(prev, prev2, ms, J, opts) {
@@ -3741,7 +3813,10 @@ window.SSQEAutoMapper = (function () {
         const model = opts.flowModel;
         // how far apart the rhythm may be: a run is matched by the shape of its rhythm (which gaps are short and
         // which long) at any speed from 0.6x to 5x the original, with a small cost for playing it at another speed
-        const relTol = opts.loose ? 3 : 0.3 + 0.35 * (1 - follow);
+        // (wide enough that a pattern carries on through a rhythm a little different from its own, costing for how
+        // far it strays, rather than stopping after a few notes: patterns cut every 3 or 4 notes made a patchwork
+        // with no flow)
+        const relTol = opts.loose ? 3 : 0.6 + 0.5 * (1 - follow);
         const consider = (e, k, i, ox, oy) => {
             // copy e[i + 1 ...] after e[i], which lands on prev
             const f = SYM[k];
@@ -3823,7 +3898,7 @@ window.SSQEAutoMapper = (function () {
                     break;
                 // (nor a far move much quicker than the difficulty takes them: a learned map's jump stream, or its
                 // quantum circle, at a harder map's pace ends the run there rather than costing a little)
-                if (opts.comfort && move >= (opts.quantum ? 0.9 : 1.3) && move > (opts.reachSlack || (opts.quantum ? 1.25 : 1.1)) * reach(gg, opts.fast ? opts.fast[q] : 0, opts))
+                if (opts.comfort && move >= (opts.quantum ? 0.9 : 1.3) && move > (opts.reachSlack || (opts.quantum ? 1.4 : 1.35)) * reach(gg, opts.fast ? opts.fast[q] : 0, opts))
                     break;
                 // (a stream is never forced off: inside one a note steps on, or hops one block over at about a right angle,
                 // never further and never back the way it came; a stream map never moves further than that at all)
@@ -4025,7 +4100,10 @@ window.SSQEAutoMapper = (function () {
             if (!opts.loose && (scale > Math.log(5) || scale < Math.log(0.6)))
                 return;
             // (and every run costs a little for the join it makes: one long run flows better than many short ones)
-            cost += rhythm / used_len * 1.5 + 0.12 * Math.abs(scale) * (0.5 + follow) + 0.8 / used_len;
+            cost += rhythm / used_len * 1.5 + 0.12 * Math.abs(scale) * (0.5 + follow) + 1.6 / used_len;
+            // (and for stopping short of where the rhythm lets it go on: of thousands of short pieces one always fits a
+            // little better by chance than the few long ones, and a map made of 3-note pieces has no flow)
+            cost += 0.09 * Math.max(0, Math.min(10, gaps.length) - used_len);
             cost += 1.8 * spins / used_len + 1.2 * scribble / used_len + ball + 1.5 * under / used_len + 3 * kinks / used_len;
             // Spins round the outside of the grid: a half lap is a flourish, lap after lap of them (copied from a
             // spinning map, or made) is the same thing over and over; and more so the more the map has spun lately
@@ -4239,6 +4317,15 @@ window.SSQEAutoMapper = (function () {
                     kinds.forEach((kind, z) => consider(kind === 'ring' ? ringRun(prev, prev2, gaps, opts.acc, opts.force && (opts.jumpScale || 1) >= 1.2 ? 2 : 1)
                         : kind === 'walk' || kind === 'star' ? walkRun(kind, prev, prev2, gaps, opts.acc, seed + 7919 * z) : streamRun(kind, prev, prev2, gaps), 0, 0, 0, 0));
                 }
+        }
+        // Flow made for exactly this rhythm (see flowRun), on the grid, whatever the speed: no learned map's rhythm
+        // to stray from, so it can go on as long as the rhythm does
+        if (!opts.quantum && prev && isWhole(prev.x) && isWhole(prev.y) && prev.x >= 0 && prev.x <= 2 && prev.y >= 0 && prev.y <= 2 && gaps.length >= 3) {
+            const wants = gaps.map((g, q) => moveFor(runJump * Math.min(2.5, Math.max(0.5, Math.pow(g / gm, opts.beta ?? 0.8))), g, opts, opts.fast ? opts.fast[q] : 0,
+                q ? gaps[q - 1] : prev2 ? prev.ms - prev2.ms : 0, q + 1 < gaps.length ? gaps[q + 1] : 0, opts.weak && opts.patterns === 'jumps' ? opts.weak[q] : 0));
+            const seed = (opts.soundSeed ?? Math.floor(Math.random() * 1e9)) + 104729;
+            for (let z = 0; z < 3; z++)
+                consider(flowRun(prev, prev2, gaps, wants, opts.acc, seed + 7919 * z), 0, 0, 0, 0);
         }
         // Similar to This Map: the notes of the part of the map that sounds like this one, from here on, turned or
         // mirrored any way, liked best (see similarParts)

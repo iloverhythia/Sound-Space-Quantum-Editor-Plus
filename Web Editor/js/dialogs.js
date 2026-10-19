@@ -404,14 +404,40 @@
             };
 
             const openBeatmap = async () => {
-                const file = await this.app.pickFile('.osu,.chart');
+                const file = await this.app.pickFile('.osu,.chart,.adofai');
                 if (!file)
                     return;
                 const text = await file.text();
-                if (file.name.toLowerCase().endsWith('.chart'))
+                if (file.name.toLowerCase().endsWith('.adofai'))
+                    this.tryParse('ADOFAI', () => setPoints(parseAdofaiTiming(text)));
+                else if (file.name.toLowerCase().endsWith('.chart'))
                     this.tryParse('CH', () => setPoints(parseChTiming(text)));
                 else
                     this.tryParse('OSU', () => setPoints(parseOsuTiming(text)));
+            };
+
+            // Detect BPM: between Start and End (the whole song when End isn't after Start); the result goes into the
+            // BPM and Offset boxes too, ready for Add Point (or Update Point)
+            let detecting = false;
+            const detect = async () => {
+                if (detecting)
+                    return;
+                detecting = true;
+                resultBox.value = '...';
+                const from = Math.max(0, parseInt(startBox.value, 10) || 0), to = parseInt(endBox.value, 10) || 0;
+                const found = await this.app.detectBpm(editor, from, to > from ? to : 0);
+                detecting = false;
+                resultBox.value = found ? found.bpm : '0';
+                if (found) {
+                    bpmBox.value = found.bpm;
+                    offsetBox.value = found.offsetMs;
+                }
+            };
+
+            const pasteAdofai = async () => {
+                const text = await this.app.readClipboard('Paste an ADOFAI level (.adofai)');
+                if (text)
+                    this.tryParse('ADOFAI', () => setPoints(parseAdofaiTiming(text)));
             };
 
             const twoLine = text => text.split('\n').map((t, i) => [i ? el('br') : null, t]).flat();
@@ -428,14 +454,14 @@
                 aLabel('  Move Selected Points (ms)', X, O + 50, 170, 20),
                 adjust.label,
                 aButton(twoLine('Paste OSU\nTimings'), pasteOsu, X, O + 125, 86, 50),
-                aButton(twoLine('Paste ADOFAI\nTimings'), () => this.notOnWeb('Importing ADOFAI timings'), X + 92, O + 125, 86, 50),
+                aButton(twoLine('Paste ADOFAI\nTimings'), pasteAdofai, X + 92, O + 125, 86, 50),
                 aButton(twoLine('Paste Clone\nHero Timings'), pasteCh, X + 183, O + 125, 86, 50),
                 aButton(twoLine('Open\nBeatmap\nTimings'), openBeatmap, X + 274, O + 125, 86, 50),
                 aButton(twoLine('Open BPM\nTapper'), () => this.tapper(), X, O + 180, 86, 50),
                 aLabel('Start (ms)  ', X + 92, O + 180, 86, 22, 'right'),
                 aLabel('End (ms)  ', X + 92, O + 208, 86, 22, 'right'),
                 startBox, endBox,
-                aButton('Detect BPM', () => this.notOnWeb('BPM detection'), X + 274, O + 180, 86, 22),
+                aButton('Detect BPM', detect, X + 274, O + 180, 86, 22),
                 resultBox,
             ];
 
@@ -720,6 +746,99 @@
             return win;
         }
 
+        // ------------------------------------------------------------ ExportPHXM.axaml (Rewrite)
+
+        exportPhxm(editor) {
+            const map = editor.map;
+            const p = map.props;
+            const X = 12, Y = 12, W = 236;
+            const split = (p.songName || '').split(' - ');
+            const titleBox = aBox(X + 104, Y, W, 20, p.songTitle || (split.length > 1 ? split.slice(1).join(' - ') : p.songName) || '');
+            const artistBox = aBox(X + 104, Y + 25, W, 20, p.songArtist || (split.length > 1 ? split[0] : ''));
+            const diffBox = at(el('select', { class: 'av-combo' }, DIFFICULTIES.map(d => el('option', { value: d }, d))), X + 104, Y + 50, W, 20);
+            diffBox.value = p.difficulty || 'N/A';
+            const customBox = aBox(X + 204, Y + 74, 136, 20, p.customDifficulty);
+            const ratingBox = aBox(X + 104, Y + 99, W, 20, String(p.rating || 0));
+            const linkBox = aBox(X + 104, Y + 124, W, 20, Object.values(map.artistLinks || {})[0] || '');
+            const platformBox = aBox(X + 104, Y + 149, W, 20, p.phxmPlatform || '');
+            const mapperBox = at(el('textarea', { class: 'av-textbox', spellcheck: 'false' }), X + 104, Y + 174, W, 100);
+            mapperBox.value = p.mappers || p.mapCreator || '';
+            let coverFile = null;
+            const coverBox = aBox(X + 104, Y + 281.5, W - 60, 25, map.coverBytes ? 'Loaded map cover' : 'None', 'readonly dark');
+            coverBox.readOnly = true;
+            const useCover = aCheck('Use Cover', p.useCover, X + 104, Y + 319, W, 20);
+            const selectCover = async () => {
+                const file = await this.app.pickFile('image/png,image/jpeg');
+                if (file) {
+                    coverFile = file;
+                    coverBox.value = file.name;
+                    useCover.input.checked = true;
+                }
+            };
+
+            const finish = async () => {
+                const title = titleBox.value.trim() || 'Untitled Song';
+                p.songTitle = title;
+                p.songArtist = artistBox.value;
+                p.difficulty = diffBox.value;
+                p.customDifficulty = customBox.value;
+                p.rating = parseFloat(ratingBox.value) || 0;
+                p.phxmPlatform = platformBox.value;
+                p.mappers = mapperBox.value;
+                p.useCover = useCover.input.checked;
+                map.artistLinks = linkBox.value ? { [artistBox.value]: linkBox.value } : {};
+                editor.onMapChanged();
+                let cover = null;
+                if (useCover.input.checked) {
+                    if (coverFile) {
+                        cover = new Uint8Array(await coverFile.arrayBuffer());
+                        map.coverBytes = cover;
+                    } else if (map.coverBytes)
+                        cover = map.coverBytes;
+                }
+                const audio = await this.app.storage.getAudio(map.soundId);
+                if (!audio) {
+                    this.message('No audio is loaded for this map.', 'Error');
+                    return;
+                }
+                const mappers = mapperBox.value.split('\n').map(m => m.trim()).filter(Boolean);
+                const meta = {
+                    title, artist: artistBox.value, mappers: (mappers.length ? mappers : ['None']).join('\n'),
+                    difficulty: diffBox.value, customDifficulty: customBox.value, rating: p.rating,
+                    artistLink: linkBox.value, artistPlatform: platformBox.value,
+                    duration: (editor.music && editor.music.duration || 0) * 1000,
+                };
+                try {
+                    const bytes = await SSQE.Formats.writePhxm(map, meta, audio, cover);
+                    const id = SSQE.Formats.fixId(`${meta.mappers.split('\n')[0]} - ${title} - ${meta.artist}`);
+                    this.app.download(new Blob([bytes], { type: 'application/octet-stream' }), `${id}.phxm`);
+                    window.SSQEStats && SSQEStats.add('mapsExported');
+                    win.close();
+                    editor.toast('EXPORTED PHXM');
+                } catch (e) {
+                    console.warn(e);
+                    this.message(`Failed to export PHXM:\n\n${e.message}`, 'Warning');
+                }
+            };
+
+            const controls = [
+                aLabel('Song Title', X, Y, 104, 20), titleBox,
+                aLabel('Song Artist', X, Y + 25, 104, 20), artistBox,
+                aLabel('Difficulty', X, Y + 50, 104, 20), diffBox,
+                aLabel('Custom Difficulty (Optional)', X, Y + 74, 204, 20), customBox,
+                aLabel('Rating', X, Y + 99, 104, 20), ratingBox,
+                aLabel('Artist Link', X, Y + 124, 104, 20), linkBox,
+                aLabel('Artist Platform', X, Y + 149, 104, 20), platformBox,
+                aLabel(['Mapper(s)', el('br'), el('br'), '(One per line)'], X, Y + 174, 104, 60, 'top'), mapperBox,
+                aLabel('Cover Image', X, Y + 284, 104, 20), coverBox,
+                aButton('Select', selectCover, X + 285, Y + 281.5, 55, 25),
+                useCover.label,
+                aButton('Finish', finish, X, Y + 343, 340, 36),
+            ];
+            const win = this.floating('export_phxm', 'Export PHXM', 364, 403, controls);
+            return win;
+        }
+
         // ------------------------------------------------------------ auto mapper options (web only)
 
         // web only: logging in (a username and a password: see online.js), and whether people may watch you map
@@ -909,6 +1028,75 @@
             return this.modal(el('div', { class: 'msg-form' }, el('div', {}, info), input), buttons,
                 { enterValue: result(canUseFolders ? 'folder' : 'download') });
         }
+    }
+
+    // TimingsWindow.ParseADOFAI: an ADOFAI level (.adofai, as text) as BPM points. The planet takes the angle it turns
+    // between two tiles at the BPM (180 degrees: one beat), from the level's offset on; SetSpeed changes the BPM (to a
+    // value, or times a multiplier) from its tile, Twirl the way round it turns, a midspin turns it straight back. A
+    // point goes in where the level starts and wherever its BPM changes. (Read as the JSON it is, so it works with
+    // levels in either of ADOFAI's formats: angleData, or the older pathData letters.)
+    const ADOFAI_DEGREES = {
+        R: 0, J: 30, E: 45, T: 60, U: 90, G: 120, Q: 135, H: 150, L: 180, N: 210, Z: 225, F: 240,
+        D: 270, B: 300, C: 315, M: 330, x: 195, W: 165, A: 345, p: 15, q: 105, Y: 285, o: 75, V: 255, '!': 999,
+    };
+    function parseAdofaiTiming(data) {
+        // (ADOFAI writes trailing commas, which JSON doesn't allow)
+        const level = JSON.parse(data.replace(/^﻿/, '').replace(/,(\s*[}\]])/g, '$1'));
+        const settings = level.settings || {};
+        let angles = null;
+        if (Array.isArray(level.angleData))
+            angles = level.angleData.map(Number);
+        else if (typeof level.pathData === 'string')
+            angles = [...level.pathData].map(c => ADOFAI_DEGREES[c] ?? 0);
+        if (!angles || angles.length < 2)
+            throw new SyntaxError('No tiles');
+        const speedAt = new Map(), twirlAt = new Set();
+        for (const a of Array.isArray(level.actions) ? level.actions : []) {
+            if (a && a.eventType === 'SetSpeed')
+                speedAt.set(+a.floor, a);
+            else if (a && a.eventType === 'Twirl')
+                twirlAt.add(+a.floor);
+        }
+        let bpm = +settings.bpm > 0 ? +settings.bpm : 100;
+        const apply = floor => {
+            const sp = speedAt.get(floor);
+            if (sp)
+                bpm = sp.speedType === 'Multiplier' ? bpm * (+sp.bpmMultiplier || 1) : +sp.beatsPerMinute > 0 ? +sp.beatsPerMinute : bpm;
+        };
+        apply(0);
+        let time = +settings.offset || 0, clockwise = true;
+        const points = [new TimingPoint(Math.round(bpm * 1000) / 1000, Math.round(time))];
+        for (let i = 1; i < angles.length; i++) {
+            const prev = angles[i - 1];
+            if (prev === 999)
+                continue;
+            let next = angles[i];
+            const midspin = next === 999;
+            if (midspin) {
+                next = angles[i + 1];
+                if (next === undefined)
+                    break;
+            }
+            if (twirlAt.has(i))
+                clockwise = !clockwise;
+            const before = bpm;
+            apply(i);
+            if (bpm !== before && bpm > 0)
+                points.push(new TimingPoint(Math.round(bpm * 1000) / 1000, Math.round(time)));
+            let angle = ((prev + (midspin ? 0 : 180) - next) % 360 + 360) % 360;
+            if (angle <= 0)
+                angle += 360;
+            if (!clockwise)
+                angle = 360 - angle;
+            if (angle <= 0)
+                angle += 360;
+            time += 60000 / bpm * angle / 180;
+        }
+        // (one point a time: a later one at the same time wins)
+        const byMs = new Map();
+        for (const p of points)
+            byMs.set(p.ms, p);
+        return [...byMs.values()].sort((a, b) => a.ms - b.ms);
     }
 
     // TimingsWindow.ParseOSU

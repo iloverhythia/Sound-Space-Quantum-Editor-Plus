@@ -2,6 +2,24 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.34 - 10/19/2026 --
+
+- DETECT BPM: a new button in the TIMING tab finds the song's BPM from its beat and sets it as the map's timing point,
+  on its first downbeat so the bars line up (it asks first if the map has timing points). Detect BPM in BPM SETUP
+  works too: between Start and End (the whole song if End is 0), and the result goes into the BPM and Offset boxes,
+  ready for Add Point
+- COPY AND PASTE BETWEEN MAPS: notes you copy (or cut) paste into any map: another one you open, a map in another
+  window, or after closing and opening the editor again (they used to go with the map they came from)
+- Everything that said it "isn't available in the web editor" now works, in the desktop app and the browser:
+  - PASTE ADOFAI TIMINGS (and .adofai files in OPEN BEATMAP TIMINGS): the level's BPM, its speed changes and twirls,
+    as timing points
+  - EXPORT to Rewrite (PHXM), with its title, artist, rating, artist link and cover
+  - CONVERT TO MP3 (in EXPORT): the map's song re-encoded as an MP3 (192 kbps, about 15 seconds for a 3 minute song)
+  - Desktop app: OPEN EDITOR FOLDER opens the folder your maps are saved in (the last SAVE AS folder, or "Sound Space
+    Quantum Editor Plus" in Documents), and PLAYTEST in Novastra works like the original editor (choose its path in
+    SETTINGS > PLAYER)
+
+----------------------------------
    -- Plus 3.0.32 - 10/18/2026 --
 
 - AUTO MAPPER: less strict, so it flows. It used to switch to a new pattern every 4 or 5 notes: a pattern from a

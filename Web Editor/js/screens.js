@@ -651,12 +651,12 @@
         // the desktop app playtests in Rhythia (its path chosen here); the web editor always uses the web player
         const desktop = !!window.ssqeDesktop;
         const notOnWeb = () => app.dialogs.message('Playtesting in Rhythia or Novastra isn\'t available in the web editor. Playtests always use the web player.');
-        const noNova = () => app.dialogs.message('Playtesting in Novastra isn\'t supported in Plus yet. Choose Rhythia or the SSQE Player.');
-        const pickRhythia = async () => {
-            const chosen = await window.ssqeDesktop.pickPlaytestPath('Rhythia');
+        const pickGame = game => async () => {
+            const chosen = await window.ssqeDesktop.pickPlaytestPath(game);
             if (chosen)
-                app.desktopPaths = { ...(app.desktopPaths || {}), Rhythia: chosen };
+                app.desktopPaths = { ...(app.desktopPaths || {}), [game]: chosen };
         };
+        const pickRhythia = pickGame('Rhythia'), pickNova = pickGame('Novastra');
         const PlayerNav = new G.Container(320, 0, 1220, 700, [
             ...games.map((g, i) => new G.Checkbox(0, i * 60, 45, 45, {
                 text: g, textSize: 34, style: unc,
@@ -666,14 +666,12 @@
                     save();
                     if (!desktop && g !== 'SSQE Player')
                         notOnWeb();
-                    else if (desktop && g === 'Novastra')
-                        noNova();
-                    else if (desktop && g === 'Rhythia' && !(app.desktopPaths && app.desktopPaths.Rhythia))
-                        pickRhythia();
+                    else if (desktop && g !== 'SSQE Player' && !(app.desktopPaths && app.desktopPaths[g]))
+                        pickGame(g)();
                 },
             })),
             pathBox(300, 0, 750, 50, 'RHYTHIA PATH', 30, () => desktop ? (app.desktopPaths && app.desktopPaths.Rhythia) || '' : '', desktop ? pickRhythia : notOnWeb),
-            pathBox(300, 60, 750, 50, 'NOVASTRA PATH', 30, () => '', desktop ? noNova : notOnWeb),
+            pathBox(300, 60, 750, 50, 'NOVASTRA PATH', 30, () => desktop ? (app.desktopPaths && app.desktopPaths.Novastra) || '' : '', desktop ? pickNova : notOnWeb),
             new G.Checkbox(0, 180, 45, 45, {
                 text: 'Open SSQE Player in Fullscreen', textSize: 34, style: unc,
                 get: () => SSQESettings.load().fullscreenPlayer, set: v => { const ps = SSQESettings.load(); ps.fullscreenPlayer = v; SSQESettings.save(ps); },
@@ -748,7 +746,7 @@
             NavController,
             btn(660, 930, 600, 100, 'SAVE AND RETURN', 54, () => { save(); app.showMenu(); }),
             resetButton,
-            btn(700, 810, 500, 50, 'OPEN EDITOR FOLDER', 30, () => app.dialogs.message('The web editor keeps its maps and audio in your browser, so there is no editor folder to open.')),
+            btn(700, 810, 500, 50, 'OPEN EDITOR FOLDER', 30, () => app.openEditorFolder()),
             btn(700, 755, 500, 50, 'CHANGE KEYBINDS', 30, () => app.openKeybinds()),
             btn(1270, 755, 500, 50, 'CREDITS', 30, () => { save(); app.showScreen('credits'); }),
             // web only: whether people can watch you map (SPECTATE in the menu) while you're logged in
@@ -861,6 +859,8 @@
             new G.Label(215, 22, 500, 100, { text: 'CREDITS', textSize: 96, font: 'square', centerMode: None }),
             new Picture(660, 170, 600, 600, { name: 'credits' }),
             new G.Label(160, 790, 1600, 100, { text: 'MADE BY MRBRECKEN AND DJ #FAWOREEOUT', textSize: 64, font: 'square' }),
+            // (CONVERT TO MP3 uses LAME, which asks to be credited: vendor/lame.LICENSE.txt)
+            new G.Label(160, 880, 1600, 40, { text: 'MP3 encoding: LAME (lame.sourceforge.net), as lamejs, under the LGPL', textSize: 24 }),
             new G.Button(660, 930, 600, 100, { text: 'BACK TO SETTINGS', textSize: 52, onLeftClick: () => app.openSettings() }),
         ];
         return new Screen(app, controls);

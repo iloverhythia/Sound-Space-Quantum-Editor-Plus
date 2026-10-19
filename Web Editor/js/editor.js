@@ -77,7 +77,6 @@
             this.trackStartRel = 0;
             this.trackEndRel = 1;
 
-            this.clipboard = [];
             this.running = false;
             this.lastFrame = performance.now();
 
@@ -580,7 +579,7 @@
             for (const [list, label, undoLabel] of lists) {
                 if (list.selected.length) {
                     const copied = [...list.selected];
-                    this.clipboard = copied.map(o => o.clone());
+                    this.app.copyObjects(copied);
                     if (cut)
                         list.removeObjects(`CUT ${undoLabel}`, copied);
                     this.toast(`${cut ? 'CUT' : 'COPIED'} ${label}`, 'other');
@@ -592,7 +591,8 @@
         paste() {
             const map = this.map;
             const s = this.settings;
-            const copied = this.clipboard.map(o => o.clone());
+            // (what was copied last, in this map or another one, in this window or another one, see app.copyObjects)
+            const copied = this.app.copiedObjects();
             if (!copied.length)
                 return;
 

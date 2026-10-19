@@ -17,6 +17,8 @@
         return false;
     };
     const autoKey = n => `${Math.round(n.x * 1000)}|${Math.round(n.y * 1000)}|${Math.round(n.ms)}`;
+    // (copied notes, kept in the browser for pasting into another map or window: see copyObjects)
+    const CLIPBOARD_KEY = 'ssqe-plus-clipboard';
     const { Map, Formats, RenderMode } = SSQE;
     const el = (...a) => SSQE.el(...a);
 
@@ -354,12 +356,13 @@
         }
 
         // Desktop app: the map and its song go to Rhythia (--a/--t/--sp/--sf, like the original editor)
-        async playtestRhythia(editor, fromStart) {
+        // (and Novastra the same way, with its own chart: see desktop/main.js)
+        async playtestRhythia(editor, fromStart, game = 'Rhythia') {
             if (editor.music.isPlaying)
                 editor.pauseMusic();
             const map = editor.map;
-            if (!(this.desktopPaths && this.desktopPaths.Rhythia)) {
-                this.dialogs.message('Choose where Rhythia is first: SETTINGS > PLAYER > RHYTHIA PATH.');
+            if (!(this.desktopPaths && this.desktopPaths[game])) {
+                this.dialogs.message(`Choose where ${game} is first: SETTINGS > PLAYER > ${game.toUpperCase()} PATH.`);
                 return;
             }
             const audio = await this.storage.getAudio(map.soundId);
@@ -370,14 +373,20 @@
             const bytes = new Uint8Array(await audio.arrayBuffer());
             const audioExt = { 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/flac': 'flac', 'audio/mp4': 'm4a' }[sniffAudio(bytes)] || 'mp3';
             SSQE.Settings.save(this.settings);
-            const result = await window.ssqeDesktop.playtest({
-                game: 'Rhythia', audio: bytes, audioExt, txt: Formats.writeTxt(map),
+            const job = {
+                game, audio: bytes, audioExt,
                 tempo: SSQESettings.tempoFromSlider(map.tempoSlider), startMs: fromStart ? 0 : Math.floor(editor.currentTime),
-            });
+            };
+            if (game === 'Novastra')
+                Object.assign(job, { nch: Formats.writeNch(map), nlr: Formats.writeNlr(map), fileId: map.fileId || map.soundId,
+                    keys: [editor.keys && editor.keys.ctrl, editor.keys && editor.keys.alt, editor.keys && editor.keys.shift] });
+            else
+                job.txt = Formats.writeTxt(map);
+            const result = await window.ssqeDesktop.playtest(job);
             if (result && result.error)
                 editor.toast(result.error, 'warn');
             else
-                editor.toast('STARTED RHYTHIA', 'other');
+                editor.toast(`STARTED ${game.toUpperCase()}`, 'other');
         }
 
         // the screen fades and settles in (back from the map player)
@@ -797,6 +806,45 @@
             }
         }
 
+        // DETECT BPM: the song's tempo between two times (the whole song without them), see automapper.js detectBpm.
+        // Resolves to { bpm, offsetMs, steady } or null (and says why)
+        async detectBpm(editor, fromMs = 0, toMs = 0) {
+            const buffer = editor && editor.music && editor.music.buffer;
+            if (!buffer || !window.SSQEAutoMapper) {
+                this.dialogs.message('The song is still loading (or couldn\'t be decoded), so its BPM can\'t be detected yet.');
+                return null;
+            }
+            editor.toast('DETECTING THE BPM...', 'other');
+            const found = await SSQEAutoMapper.detectBpm(buffer, fromMs, toMs, text => editor.toast(text, 'other')).catch(err => {
+                console.warn(err);
+                return null;
+            });
+            if (!found) {
+                editor.toast('NO CLEAR BEAT FOUND', 'other');
+                this.dialogs.message(toMs > fromMs && toMs - fromMs < 15000
+                    ? 'Pick at least 15 seconds of the song to detect its BPM from.'
+                    : 'No clear beat could be found in this part of the song. Try a part with drums, or tap it with the BPM Tapper.');
+                return null;
+            }
+            editor.toast(`DETECTED ${found.bpm} BPM - OFFSET ${found.offsetMs}MS${found.steady ? '' : ' (THE TEMPO DRIFTS)'}`, 'other');
+            return found;
+        }
+
+        // DETECT BPM in the Timing tab: the whole song's, as the map's timing point (asks first if it has some)
+        async detectBpmToMap(editor) {
+            const map = editor.map;
+            const found = await this.detectBpm(editor);
+            if (!found)
+                return;
+            if (map.timingPoints.length) {
+                const answer = await this.dialogs.confirm(`Detected ${found.bpm} BPM (first downbeat at ${found.offsetMs} ms)${found.steady ? '' : ', though the tempo drifts in places'}.\n\nReplace the map's ${map.timingPoints.length} timing point${map.timingPoints.length === 1 ? '' : 's'} with it?`);
+                if (answer !== 'yes')
+                    return;
+            }
+            map.replacePoints('DETECT BPM', map.timingPoints.slice(), [new SSQE.TimingPoint(found.bpm, found.offsetMs)]);
+            editor.toast(`SET BPM TO ${found.bpm} AT ${found.offsetMs}MS`, 'other');
+        }
+
         async importIni(map) {
             const file = await this.pickFile('.ini');
             if (file)
@@ -1172,6 +1220,119 @@
             this.editor && this.editor.toast(`REPLACED AUDIO ID WITH ${id}`);
         }
 
+        // Copy and paste between maps: what's copied is the app's, not one map's (each map you open gets an editor of
+        // its own, so copied notes used to go with the map they came from). Notes are also kept in the browser's
+        // storage, so they paste into a map in another window or tab, or after the editor was closed and opened again.
+        copyObjects(objects) {
+            const time = Date.now();
+            this.clipboard = { items: objects.map(o => o.clone()), time };
+            if (objects.length && objects.every(o => o instanceof SSQE.Note))
+                try {
+                    localStorage.setItem(CLIPBOARD_KEY, JSON.stringify({ time, notes: objects.map(n => [n.x, n.y, n.ms, n.enableEasing ? 1 : 0, n.style | 0, n.direction | 0]) }));
+                } catch { /* full or blocked: this window still has them */ }
+        }
+
+        // copies of what was copied last (whichever was later: here, or notes copied in another window)
+        copiedObjects() {
+            let stored = null;
+            try {
+                stored = JSON.parse(localStorage.getItem(CLIPBOARD_KEY) || 'null');
+            } catch { /* nothing there */ }
+            const mine = this.clipboard;
+            if (stored && Array.isArray(stored.notes) && (!mine || stored.time > mine.time))
+                return stored.notes.filter(n => Array.isArray(n) && n.length >= 3 && n.slice(0, 3).every(Number.isFinite))
+                    .map(([x, y, ms, e, st, d]) => new SSQE.Note(x, y, ms, !!e, st || 0, d || 0));
+            return mine ? mine.items.map(o => o.clone()) : [];
+        }
+
+        // OPEN EDITOR FOLDER: in the desktop app, the folder maps are saved in (see desktop/main.js); a browser has none
+        async openEditorFolder() {
+            if (window.ssqeDesktop && window.ssqeDesktop.openFolder) {
+                const r = await window.ssqeDesktop.openFolder().catch(e => ({ error: e.message }));
+                if (r && r.error)
+                    this.dialogs.message(`The editor folder couldn't be opened: ${r.error}`);
+                return;
+            }
+            this.dialogs.message('The web editor keeps its maps and audio in your browser, so there is no editor folder to open. (The desktop app opens the folder your maps are saved in.)');
+        }
+
+        // CONVERT TO MP3 (MusicPlayer.ConvertToMP3): the map's song encoded as an MP3 (192 kbps, with LAME: vendor/
+        // lame.min.js, loaded the first time it's needed), replacing the audio the map keeps
+        async convertToMp3(editor) {
+            const map = editor.map;
+            const stored = await this.storage.getAudio(map.soundId);
+            const buffer = editor.music && editor.music.buffer;
+            if (!stored || !buffer) {
+                this.dialogs.message('The song is still loading (or couldn\'t be decoded), so it can\'t be converted yet.');
+                return;
+            }
+            const head = new Uint8Array(await stored.slice(0, 4).arrayBuffer());
+            const isMp3 = (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) || (head[0] === 0xff && (head[1] & 0xe0) === 0xe0);
+            const ask = isMp3 ? 'This audio is already an MP3 file! Do you want to convert it anyway?\nThis will take a while!'
+                : 'Are you sure you want to convert this audio to MP3?\nThis will take a while!';
+            if (await this.dialogs.confirm(ask, [['Yes', 'yes'], ['No', 'no']], 'Info') !== 'yes')
+                return;
+            if (editor.music.isPlaying)
+                editor.pauseMusic();
+            try {
+                if (!window.lamejs)
+                    await new Promise((resolve, reject) => {
+                        const tag = document.createElement('script');
+                        tag.src = 'js/vendor/lame.min.js';
+                        tag.onload = resolve;
+                        tag.onerror = () => reject(new Error('The MP3 encoder could not be loaded.'));
+                        document.head.append(tag);
+                    });
+                // (LAME takes 32, 44.1 or 48 kHz at most: anything else is resampled to 44.1)
+                let src = buffer;
+                if (![32000, 44100, 48000].includes(src.sampleRate)) {
+                    const ctx = new OfflineAudioContext(Math.min(2, src.numberOfChannels), Math.ceil(src.duration * 44100), 44100);
+                    const node = ctx.createBufferSource();
+                    node.buffer = src;
+                    node.connect(ctx.destination);
+                    node.start();
+                    src = await ctx.startRendering();
+                }
+                const channels = Math.min(2, src.numberOfChannels);
+                const encoder = new lamejs.Mp3Encoder(channels, src.sampleRate, 192);
+                const toInt = data => {
+                    const out = new Int16Array(data.length);
+                    for (let i = 0; i < data.length; i++)
+                        out[i] = Math.max(-32768, Math.min(32767, Math.round(data[i] * 32767)));
+                    return out;
+                };
+                const left = toInt(src.getChannelData(0)), right = channels > 1 ? toInt(src.getChannelData(1)) : null;
+                const parts = [];
+                const STEP = 1152 * 40;
+                let last = performance.now();
+                for (let i = 0; i < left.length; i += STEP) {
+                    const l = left.subarray(i, i + STEP);
+                    const chunk = right ? encoder.encodeBuffer(l, right.subarray(i, i + STEP)) : encoder.encodeBuffer(l);
+                    if (chunk.length)
+                        parts.push(new Uint8Array(chunk));
+                    // (a moment for the page every so often, with how far it's got)
+                    if (performance.now() - last > 40) {
+                        editor.toast(`CONVERTING TO MP3 ${Math.floor(i / left.length * 100)}%`, 'other');
+                        await new Promise(r => setTimeout(r));
+                        last = performance.now();
+                    }
+                }
+                const end = encoder.flush();
+                if (end.length)
+                    parts.push(new Uint8Array(end));
+                const blob = new Blob(parts, { type: 'audio/mpeg' });
+                await this.storage.putAudio(map.soundId, blob);
+                await this.music.load(blob);
+                map.duration = this.music.duration * 1000;
+                this.music.setTempo(map.tempo);
+                editor.toast('SUCCESSFULLY CONVERTED', 'other');
+            } catch (e) {
+                console.warn(e);
+                editor.toast('FAILED TO CONVERT', 'other');
+                this.dialogs.message(`Converting to MP3 failed: ${e.message}`, 'Error');
+            }
+        }
+
         async changeAudio(editor) {
             const file = await this.pickFile('audio/*,.asset,.mp3,.ogg,.wav,.flac,.m4a,.opus');
             if (!file)
@@ -1197,10 +1358,8 @@
             const game = this.settings.playtestGame || 'SSQE Player';
             if (window.ssqeDesktop && game === 'Rhythia')
                 return this.playtestRhythia(editor, fromStart);
-            if (window.ssqeDesktop && game === 'Novastra') {
-                this.dialogs.message('Playtesting in Novastra isn\'t supported in Plus yet. Choose Rhythia or the SSQE Player in SETTINGS > PLAYER.');
-                return;
-            }
+            if (window.ssqeDesktop && game === 'Novastra')
+                return this.playtestRhythia(editor, fromStart, 'Novastra');
             if (!window.SSQEGame) {
                 this.dialogs.message('The web player could not be loaded. Make sure the "Web Player" folder sits next to the "Web Editor" folder.');
                 return;

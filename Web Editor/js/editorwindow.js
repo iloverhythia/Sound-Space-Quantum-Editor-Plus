@@ -59,6 +59,8 @@
             numeric(170, 50, 130, 40, 31, () => s.sfxOffset, v => { s.sfxOffset = v; saveS(); }),
             numeric(340, 50, 130, 40, 31, () => s.musicOffset, v => { s.musicOffset = v; saveS(); }),
             button(0, 110, 210, 40, 'OPEN BPM SETUP', 27, () => app.dialogs.timings(editor)),
+            // (the song's BPM, found from its beat, as the map's timing point)
+            button(220, 110, 210, 40, 'DETECT BPM', 27, () => app.detectBpmToMap(editor)),
             button(0, 160, 210, 40, 'IMPORT INI', 27, () => app.importIni(map)),
             checkbox(0, 210, 'Metronome', 26, 'metronome'),
             checkbox(0, 250, 'Scale Metronome With Divisor', 26, 'scaleMetronome'),
@@ -368,14 +370,14 @@
                     app.dialogs.exportSspm(editor);
                 else if (type === EXPORT_TYPES[1])
                     app.dialogs.exportSspm(editor, 'rhm');
+                else if (type === EXPORT_TYPES[2])
+                    app.dialogs.exportPhxm(editor);
                 else if (type === EXPORT_TYPES[3])
                     app.hitTheRoad();
-                else
-                    app.dialogs.message(`Exporting to ${s.exportType} isn't available in the web editor yet. Use Nightly (SSPM) or Rhythia (RHM).`);
             }),
             ReplaceIDBox,
             button(275, 280, 210, 40, 'REPLACE', 27, () => app.replaceAudioId(map, ReplaceIDBox.text)),
-            button(275, 350, 210, 40, 'CONVERT TO MP3', 27, () => app.dialogs.message('Converting audio to MP3 isn\'t available in the web editor.')),
+            button(275, 350, 210, 40, 'CONVERT TO MP3', 27, () => app.convertToMp3(editor)),
             label(275, 190, 210, 40, 'Replace Audio ID', 30),
             button(0, 20, 210, 40, 'CALCULATE SR/RP', 27, () => calculateSR()),
             SRLabel,

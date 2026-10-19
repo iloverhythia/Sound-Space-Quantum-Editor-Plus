@@ -771,5 +771,116 @@
         return new TextEncoder().encode(JSON.stringify(data));
     }
 
-    SSQE.Formats = { VFX_LOOKUP, fixId, readObjects, readTxt, writeTxt, readIni, writeIni, readSspm, writeSspm, readOsu, setExportOffset, readZip, readRhm, writeRhmMap };
+
+    // ---------------------------------------------------------------- Novastra (NPK.WriteNCH / WriteNLR)
+
+    // The chart Novastra plays (chart.nch, JSON): the notes (Novastra's grid is mirrored left to right and centred on
+    // the middle cell), mines, beats, glides, fever and tempo events, as the desktop editor writes it for a playtest
+    function writeNch(map) {
+        const notes = map.notes.items.map(n => {
+            const o = { x: 1 - n.x, y: n.y - 1, t: n.ms };
+            if (n.enableEasing)
+                o.e = { s: n.style | 0, d: n.direction | 0 };
+            return o;
+        });
+        const beats = [], glides = [], events = [];
+        const special = map.specialObjects.items.slice().sort((a, b) => a.ms - b.ms);
+        const valid = special.filter(o => o.id === 12 || o.id === 13 || o.id === 14);
+        const lastMs = Math.max(map.notes.items.length ? map.notes.items[map.notes.items.length - 1].ms : 0, valid.length ? valid[valid.length - 1].ms : 0);
+        let prevFever = null;
+        for (const o of special) {
+            if (o.id === 12)
+                beats.push({ t: o.ms });
+            else if (o.id === 13)
+                glides.push({ t: o.ms, d: (['up', 'right', 'down', 'left'][o.direction] || 'none') });
+            else if (o.id === 14)
+                notes.push({ x: 1 - o.x, y: o.y - 1, t: o.ms, m: true });
+            else if (o.id === 16 && o.ms < lastMs) {
+                const from = Math.max(prevFever ?? 0, o.ms);
+                prevFever = o.ms + o.duration;
+                events.push({ type: 'fever', t: from, active: true });
+                events.push({ type: 'fever', t: Math.min(o.ms + o.duration, lastMs), active: false });
+            }
+        }
+        for (const p of map.timingPoints)
+            events.push({ type: 'tempo', t: p.ms, bpm: p.bpm });
+        const byT = (a, b) => a.t - b.t;
+        const songOffset = parseInt(map.props.songOffset, 10) || 0;
+        return JSON.stringify({
+            songOffset: songOffset - (Math.trunc(map.props.exportOffset) || 0),
+            notes: notes.sort(byT), beats: beats.sort(byT), glides: glides.sort(byT), events: events.sort(byT),
+        });
+    }
+
+    // Its lyrics (lyrics.nlr): "ms|properties|text" a line, or '' when there are none
+    function writeNlr(map) {
+        const lines = [];
+        for (const l of map.specialObjects.items.filter(o => o.id === 15).sort((a, b) => a.ms - b.ms)) {
+            let text = l.text || '', props = '';
+            if (!text.trim() && !l.fadeOut)
+                props += 'r';
+            if (text.startsWith('-')) {
+                props += 'r';
+                text = text.slice(1);
+            }
+            if (text.endsWith('-')) {
+                props += 'n';
+                text = text.slice(0, -1);
+            }
+            if (l.fadeIn)
+                props += 'i';
+            if (l.fadeOut)
+                props += 'o';
+            lines.push(`${l.ms}|${props || 'x'}|${text}`);
+        }
+        return lines.join('\n');
+    }
+
+    // ---------------------------------------------------------------- Rewrite (PHXM.Write)
+
+    // A .phxm (a zip): metadata.json, objects.phxmo (the notes: little-endian, as the desktop editor writes them;
+    // Rewrite's grid is mirrored left to right), the audio and, if any, the cover. Resolves to the zip's bytes.
+    async function writePhxm(map, meta, audio, cover) {
+        const head = new Uint8Array(await audio.slice(0, 4).arrayBuffer());
+        const ext = String.fromCharCode(...head) === 'OggS' ? 'ogg'
+            : (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) || (head[0] === 0xff && (head[1] & 0xe0) === 0xe0) ? 'mp3' : 'asset';
+        const notes = map.notes.items;
+        const isWhole = v => Math.abs(v - Math.round(v)) < 1e-6;
+        let size = 8 + 4 * 11;
+        for (const n of notes)
+            size += 5 + (isWhole(n.x) && isWhole(n.y) ? 2 : 8);
+        const buf = new ArrayBuffer(size), v = new DataView(buf);
+        let o = 0;
+        v.setInt32(o, 12, true); o += 4;
+        v.setInt32(o, notes.length, true); o += 4;
+        for (const n of notes) {
+            const quantum = !(isWhole(n.x) && isWhole(n.y));
+            v.setUint32(o, Math.max(0, Math.round(n.ms)), true); o += 4;
+            v.setUint8(o++, quantum ? 1 : 0);
+            if (quantum) {
+                v.setFloat32(o, 1 - n.x, true); o += 4;
+                v.setFloat32(o, n.y - 1, true); o += 4;
+            } else {
+                v.setUint8(o++, 2 - Math.round(n.x));
+                v.setUint8(o++, Math.round(n.y));
+            }
+        }
+        const json = {
+            Artist: meta.artist || '', AudioExt: ext, Difficulty: Math.max(0, DIFFICULTIES.indexOf(meta.difficulty)),
+            DifficultyName: meta.customDifficulty || meta.difficulty || 'N/A', HasAudio: true, HasCover: !!cover, HasVideo: false,
+            ID: fixId(`${meta.mappers.split('\n')[0] || 'None'} - ${meta.artist || ''} - ${meta.title || ''}`),
+            Mappers: meta.mappers.split('\n'), Rating: +meta.rating || 0, Title: meta.title || '',
+            ArtistLink: meta.artistLink || '', ArtistPlatform: meta.artistPlatform || '', Length: Math.round(meta.duration || 0),
+        };
+        const files = [
+            { name: 'metadata.json', blob: new Blob([JSON.stringify(json, null, 2)]) },
+            { name: 'objects.phxmo', blob: new Blob([buf]) },
+            { name: `audio.${ext}`, blob: audio },
+        ];
+        if (cover)
+            files.push({ name: 'cover.png', blob: new Blob([cover]) });
+        return SSQE.zipFiles(files);
+    }
+
+    SSQE.Formats = { VFX_LOOKUP, fixId, readObjects, readTxt, writeTxt, readIni, writeIni, readSspm, writeSspm, readOsu, setExportOffset, readZip, readRhm, writeRhmMap, writeNch, writeNlr, writePhxm };
 })();

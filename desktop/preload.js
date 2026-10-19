@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('ssqeDesktop', {
     saveMapAs: (name, txt, ini) => ipcRenderer.invoke('ssqe-save-as', { name, txt, ini }),
     saveMapTo: (file, txt, ini) => ipcRenderer.invoke('ssqe-save-to', { file, txt, ini }),
     readIniFor: file => ipcRenderer.invoke('ssqe-read-ini', file),
+    // OPEN EDITOR FOLDER: the folder maps are saved in, in the file manager
+    openFolder: () => ipcRenderer.invoke('ssqe-open-folder'),
     // where a file that was opened or dropped is on the computer ('' when it isn't one)
     pathOf: file => {
         try {

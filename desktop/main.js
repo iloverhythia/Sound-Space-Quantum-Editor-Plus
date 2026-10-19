@@ -436,16 +436,31 @@ function writeMap(file, txt, ini) {
     fs.writeFileSync(file, String(txt ?? ''));
     fs.writeFileSync(file.replace(/\.txt$/i, '.ini'), String(ini ?? ''));
 }
+// the editor's folder: where maps were last saved, or a folder of its own in Documents (made the first time)
+function mapsDir() {
+    const p = prefs();
+    try {
+        if (p.saveDir && fs.statSync(p.saveDir).isDirectory())
+            return p.saveDir;
+    } catch { /* gone: the default */ }
+    const dir = path.join(app.getPath('documents'), NAME);
+    try {
+        fs.mkdirSync(dir, { recursive: true });
+        return dir;
+    } catch {
+        return app.getPath('documents');
+    }
+}
+// OPEN EDITOR FOLDER (Settings, and its keybind): that folder in the file manager
+ipcMain.handle('ssqe-open-folder', async () => {
+    const dir = mapsDir();
+    const err = await shell.openPath(dir);
+    return err ? { error: err } : { ok: true, dir };
+});
 ipcMain.handle('ssqe-save-as', async (_, { name, txt, ini }) => {
     const p = prefs();
     const safe = String(name || 'map').replace(/[\\/:*?"<>|]/g, '_') || 'map';
-    let dir = p.saveDir;
-    try {
-        if (!dir || !fs.statSync(dir).isDirectory())
-            dir = app.getPath('documents');
-    } catch {
-        dir = app.getPath('documents');
-    }
+    const dir = mapsDir();
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
         title: 'Save Map As',
         defaultPath: path.join(dir, `${safe}.txt`),
@@ -482,9 +497,11 @@ ipcMain.handle('ssqe-read-ini', async (_, file) => {
 // Like the original editor: the map as a .txt and the song next to it in a temp folder, and Rhythia started with
 // --a=<audio> --t=<map> --sp=<speed> --sf=<start ms>
 ipcMain.handle('ssqe-playtest', async (_, job) => {
+    if (job && job.game === 'Novastra')
+        return playtestNovastra(job);
     try {
         if (!job || job.game !== 'Rhythia')
-            return { error: 'Only Rhythia playtests are supported.' };
+            return { error: 'Only Rhythia and Novastra playtests are supported.' };
         const exe = prefs().rhythiaPath;
         if (!exe || !fs.existsSync(exe))
             return { error: 'INVALID RHYTHIA PATH [MENU > SETTINGS > PLAYER]' };
@@ -502,6 +519,32 @@ ipcMain.handle('ssqe-playtest', async (_, job) => {
         return { error: `FAILED TO START RHYTHIA (${e.message})` };
     }
 });
+
+// Novastra, like the original editor: the song (audio.mp3 or .ogg), the chart (chart.nch) and its lyrics
+// (lyrics.nlr) in a temp folder, and Novastra started in demo mode on it: --demo-mode -c=<folder>
+// -m=<speed>,<ctrl>,<alt>,<shift> -f=<map id> -p=<start, seconds>
+function playtestNovastra(job) {
+    try {
+        const exe = prefs().novaPath;
+        if (!exe || !fs.existsSync(exe))
+            return { error: 'INVALID NOVASTRA PATH [MENU > SETTINGS > PLAYER]' };
+        const dir = path.join(app.getPath('temp'), 'ssqe-plus-novaPlaytest');
+        fs.mkdirSync(dir, { recursive: true });
+        for (const f of fs.readdirSync(dir))
+            fs.rmSync(path.join(dir, f), { force: true, recursive: true });
+        fs.writeFileSync(path.join(dir, `audio.${job.audioExt === 'ogg' ? 'ogg' : 'mp3'}`), Buffer.from(job.audio));
+        fs.writeFileSync(path.join(dir, 'chart.nch'), String(job.nch || '{}'));
+        if (job.nlr)
+            fs.writeFileSync(path.join(dir, 'lyrics.nlr'), String(job.nlr));
+        const flags = (job.keys || []).map(k => k ? 1 : 0);
+        const args = ['--demo-mode', `-c=${dir.replace(/\\/g, '/')}`, `-m=${Number(job.tempo) || 1},${flags[0] || 0},${flags[1] || 0},${flags[2] || 0}`,
+            `-f=${String(job.fileId || '').replace(/[^\w .-]/g, '_')}`, `-p=${Math.max(0, (Number(job.startMs) || 0) / 1000)}`];
+        spawn(exe, args, { cwd: path.dirname(exe), detached: true, stdio: 'ignore' }).unref();
+        return { ok: true };
+    } catch (e) {
+        return { error: `FAILED TO START NOVASTRA (${e.message})` };
+    }
+}
 
 // ------------------------------------------------ the window
 

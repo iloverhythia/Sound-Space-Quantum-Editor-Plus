@@ -6018,6 +6018,28 @@ window.SSQEAutoMapper = (function () {
         return best.notes;
     }
 
+    // DETECT BPM (the BPM Setup window and the Timing tab): the song's tempo between two times (the whole song if
+    // `toMs` isn't after `fromMs`), the same detection the auto mapper times its notes by. Resolves to { bpm, offsetMs
+    // (the first downbeat from `fromMs` on, so bars line up), steady (whether the beat holds all through) } or null
+    // when it can't tell (under about 15 seconds, or no clear beat).
+    async function detectBpm(buffer, fromMs = 0, toMs = 0, progress = () => { }) {
+        const a = await analyse(buffer, progress);
+        const f0 = Math.max(0, Math.floor(fromMs / 10));
+        const f1 = toMs > fromMs ? Math.min(a.frames, Math.ceil(toMs / 10)) : a.frames;
+        if (f1 - f0 < 1500)
+            return null;
+        progress('DETECTING THE BPM');
+        const tempo = f0 === 0 && f1 === a.frames ? a.tempo : await findTempo(a.beats.subarray(f0, f1), a.hits.subarray(f0, f1), f1 - f0);
+        if (!tempo || !(tempo.bpm > 0))
+            return null;
+        const beat = 60000 / tempo.bpm, offset = tempo.offsetMs + f0 * 10;
+        const down = offset + findDownbeat(a, beat, offset) * beat;
+        // (the first downbeat from where it starts, whole bars back from the one found)
+        const bar = 4 * beat;
+        const first = down - Math.floor((down - f0 * 10) / bar) * bar;
+        return { bpm: tempo.bpm, offsetMs: Math.max(0, Math.round(first)), steady: !!tempo.steady };
+    }
+
     // Bulk learning: reads every map file (.sspm, .rhm, .txt, .osu) and learns from it.
     // report(text, isError) shows progress. Resolves to { learned, known, failed }.
     async function learnFiles(files, report = () => { }) {
@@ -6064,5 +6086,5 @@ window.SSQEAutoMapper = (function () {
     }
 
     load();
-    return { learn, learnFiles, stats, statsSync, reset, generate, analyse, findTempo, findEvents, trimToStars, quantumStyleOf: notes => quantumStyleOf(toEntry(notes)) };
+    return { learn, learnFiles, stats, statsSync, reset, generate, analyse, findTempo, findEvents, trimToStars, detectBpm, quantumStyleOf: notes => quantumStyleOf(toEntry(notes)) };
 })();

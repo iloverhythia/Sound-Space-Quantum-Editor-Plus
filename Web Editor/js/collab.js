@@ -147,6 +147,8 @@ window.SSQECollab = (function () {
         O().setBusy(true);
         ch.on('broadcast', { event: 'c' }, ({ payload }) => {
             try {
+                // (someone's mouse or edits: drawn at full speed for a moment, see Editor.keepAwake)
+                app.editor && app.editor.keepAwake && app.editor.keepAwake(400);
                 receive(payload);
             } catch (e) {
                 console.warn('collab', e);

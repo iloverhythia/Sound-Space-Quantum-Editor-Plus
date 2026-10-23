@@ -607,6 +607,35 @@
                 const img = texture(image);
                 if (img.complete && img.naturalWidth) {
                     ctx.globalAlpha = (color[3] ?? 255) / 255;
+                    // (web only, for speed: the picture scaled to the screen's pixels once and kept, so a frame copies it
+                    // 1:1 instead of scaling a 4K picture down again every frame)
+                    const cover0 = typeof this.cover === 'function' ? this.cover() : this.cover;
+                    const zoom0 = typeof this.imageZoom === 'function' ? this.imageZoom() : this.imageZoom || 1;
+                    const m = ctx.getTransform(), r0 = this.rect;
+                    const pw = Math.round(r0.w * m.a), ph = Math.round(r0.h * m.d);
+                    const key = `${img.src}|${pw}x${ph}|${zoom0}|${!!cover0}`;
+                    if (pw > 0 && ph > 0 && pw * ph <= 40e6) {
+                        if (!this.scaled || this.scaled.key !== key) {
+                            const c = document.createElement('canvas');
+                            c.width = pw;
+                            c.height = ph;
+                            const g = c.getContext('2d');
+                            g.imageSmoothingQuality = 'high';
+                            let r = { x: 0, y: 0, w: pw, h: ph };
+                            if (zoom0 !== 1)
+                                r = { x: pw * (1 - zoom0) / 2, y: ph * (1 - zoom0) / 2, w: pw * zoom0, h: ph * zoom0 };
+                            if (cover0) {
+                                const scale = Math.max(r.w / img.naturalWidth, r.h / img.naturalHeight);
+                                const sw = r.w / scale, sh = r.h / scale;
+                                g.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, r.x, r.y, r.w, r.h);
+                            } else
+                                g.drawImage(img, r.x, r.y, r.w, r.h);
+                            this.scaled = { key, canvas: c };
+                        }
+                        ctx.drawImage(this.scaled.canvas, r0.x, r0.y, r0.w, r0.h);
+                        ctx.globalAlpha = 1;
+                        return;
+                    }
                     let r = this.rect;
                     const cover = typeof this.cover === 'function' ? this.cover() : this.cover;
                     // web only: zoom the picture around its middle (it follows the editor's Grid Zoom)

@@ -2,6 +2,20 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.35 - 10/23/2026 --
+
+- SPEED, especially on a MacBook (a 120Hz screen at twice the pixels): measured at a MacBook's size and pixel density
+  - the timeline's WAVEFORM (on by default) is drawn once into strips and kept, instead of tens of thousands of tiny
+    lines every frame: playing a busy song went from 135ms a frame to 24ms (it was the slowest thing on the screen)
+  - the editor BACKGROUND picture is scaled to the screen once, not every frame (half the time of an idle frame)
+  - the MENU draws only the lines of the changelog in view, not all of it every frame: 23 to 60 frames a second
+  - the editor only draws every frame while something can change (the song playing, the mouse or keys in use, a
+    message showing, the map changing, someone mapping with you), and about 15 times a second otherwise, so it isn't
+    redrawing the same picture 120 times a second
+  - the MAP PLAYER doesn't multisample on high-density screens like a MacBook's (4 times the work on 4 times the
+    pixels, for edges too fine to see the steps in)
+
+----------------------------------
    -- Plus 3.0.34 - 10/19/2026 --
 
 - DETECT BPM: a new button in the TIMING tab finds the song's BPM from its beat and sets it as the map's timing point,

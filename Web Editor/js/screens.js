@@ -50,8 +50,9 @@
             if (key !== this.wrappedFor) {
                 this.wrapped = wrapText(this.content, this.scaledTextSize, this.font, this.rect.w);
                 this.wrappedFor = key;
+                this.lines = this.wrapped.split('\n');
             }
-            const lines = this.wrapped.split('\n').length;
+            const lines = this.lines.length;
             const contentH = lines * this.scaledTextSize;
             this.maxScroll = Math.max(0, contentH - this.rect.h);
             this.scroll = Math.min(Math.max(this.scroll, 0), this.maxScroll);
@@ -106,7 +107,11 @@
             ctx.beginPath();
             ctx.rect(this.rect.x, this.rect.y, this.rect.w, this.rect.h);
             ctx.clip();
-            G.Text.draw(ctx, this.wrapped, this.rect.x, this.rect.y - this.scroll, this.scaledTextSize, this.font, [255, 255, 255]);
+            // (only the lines in view: the whole changelog every frame was most of the menu's time)
+            const size = this.scaledTextSize;
+            const first = Math.max(0, Math.floor(this.scroll / size) - 1), last = Math.min(this.lines.length, Math.ceil((this.scroll + this.rect.h) / size) + 1);
+            if (last > first)
+                G.Text.draw(ctx, this.lines.slice(first, last).join('\n'), this.rect.x, this.rect.y - this.scroll + first * size, size, this.font, [255, 255, 255]);
             ctx.restore();
         }
     }

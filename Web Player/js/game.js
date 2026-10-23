@@ -973,7 +973,9 @@ void main()
             this.overlay = opts.overlay;
             this.ctx2d = this.overlay.getContext('2d');
 
-            const gl = this.canvas.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: false });
+            // (web only, for speed: no multisampling on a high-density screen like a MacBook's, where it was 4x the
+            // work on 4x the pixels and the edges are already too fine to see steps in)
+            const gl = this.canvas.getContext('webgl2', { antialias: (window.devicePixelRatio || 1) < 1.75, alpha: false, preserveDrawingBuffer: false });
             if (!gl)
                 throw new Error('WebGL2 is not supported by this browser');
             this.gl = gl;

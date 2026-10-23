@@ -10,6 +10,8 @@
     } = SSQE;
 
     const G = SSQE.GUI;
+    // (input of any kind keeps the editor drawing every frame for a moment, see Editor.keepAwake)
+    const WAKE_EVENTS = ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup', 'touchstart', 'touchmove', 'input', 'change', 'resize', 'focus'];
 
     // current screen rects of the track and grid controls (updated on resize like Control.Resize)
     let TRACK = { x: 0, y: 0, w: 1920, h: 86 };
@@ -146,7 +148,16 @@
         }
 
         // GuiWindowEditor.ShowInfo / ShowWarn / ShowError / ShowOther
+        // Drawing only when something can change (web only, for speed and battery): while the song plays, the mouse or
+        // keys are in use, a toast is showing or the map changes, every frame; for a moment after (so hover fades and
+        // the like finish), then about 15 frames a second while nothing happens. A MacBook's screen asks for 120 frames
+        // a second, every one of them the whole editor at twice the pixels.
+        keepAwake(ms = 1000) {
+            this.awakeUntil = Math.max(this.awakeUntil || 0, performance.now() + ms);
+        }
+
         toast(text, kind = 'info') {
+            this.keepAwake(2200);
             const s = this.settings;
             const color = kind === 'warn' ? s.color2 : kind === 'error' ? [255, 200, 0] : kind === 'other' ? [255, 109, 0] : s.color1;
             this.ui && this.ui.Toast.show(text, color);
@@ -256,7 +267,11 @@
                 blur: () => {
                     this.keys = { ctrl: false, alt: false, shift: false };
                 },
+                wake: () => this.keepAwake(1000),
             };
+            for (const type of WAKE_EVENTS)
+                window.addEventListener(type, this.handlers.wake, { capture: true, passive: true });
+            this.keepAwake(1000);
 
             window.addEventListener('mousemove', this.handlers.mousemove);
             window.addEventListener('mousedown', this.handlers.mousedown);
@@ -272,6 +287,8 @@
 
         detachInput() {
             const h = this.handlers;
+            for (const type of WAKE_EVENTS)
+                window.removeEventListener(type, h.wake, { capture: true });
             window.removeEventListener('mousemove', h.mousemove);
             window.removeEventListener('mousedown', h.mousedown);
             window.removeEventListener('mouseup', h.mouseup);
@@ -1129,6 +1146,16 @@
         frame(now) {
             if (!this.running)
                 return;
+            // (nothing going on: a frame every 66ms or so, see keepAwake)
+            if (this.map.version !== this.seenVersion) {
+                this.seenVersion = this.map.version;
+                this.keepAwake(600);
+            }
+            if (!this.music.isPlaying && now >= (this.awakeUntil || 0) && !this.mouse.left && !this.mouse.right && !this.selecting
+                && now - this.lastFrame < 66) {
+                this.raf = requestAnimationFrame(t => this.frame(t));
+                return;
+            }
             const frametime = Math.max(0, (now - this.lastFrame) / 1000);
             this.lastFrame = now;
 
@@ -2088,35 +2115,79 @@
             }
         }
 
+        // Waveform.Render: a line strip through the left/right samples of each 2ms step. Drawn once into strips 256
+        // pixels wide (at the screen's pixel density) and kept, so a frame only copies the few strips on screen: tens of
+        // thousands of tiny lines every frame made the timeline the slowest thing on the screen (100ms a frame on a
+        // busy song at 2x, while playing). The strips are made again when the zoom, the colour, the style, the size or
+        // the song changes.
         renderWaveform(wave, msX, minMs, maxMs, H) {
             const ctx = this.ctx;
             const offset = this.music.musicOffset - 15;
             const stepMs = wave.resolution * 1000;
-            const first = Math.max(0, Math.floor((minMs - offset) / stepMs) - 1);
-            const last = Math.min(wave.count, Math.ceil((maxMs - offset) / stepMs) + 1);
-            if (last <= first)
+            const msToPx = this.msToPx;
+            if (!(msToPx > 0) || !(stepMs > 0))
                 return;
+            const ratio = G.pixelRatio || 1;
+            const color = this.color(3), classic = !!this.settings.classicWaveform;
+            const TILE = 256;
+            const key = `${msToPx}|${H}|${ratio}|${color}|${classic}|${offset}`;
+            let cache = this.waveCache;
+            if (!cache || cache.wave !== wave || cache.key !== key) {
+                cache = this.waveCache = { wave, key, tiles: new Map() };
+            }
+            // tile k covers the song from k * TILE pixels to (k + 1) * TILE pixels at this zoom
+            const tileMs = TILE / msToPx;
+            const k0 = Math.floor(minMs / tileMs), k1 = Math.floor(maxMs / tileMs);
+            for (let k = k0; k <= k1; k++) {
+                let tile = cache.tiles.get(k);
+                if (!tile) {
+                    tile = this.waveTile(wave, k * tileMs, tileMs, TILE, H, ratio, offset, stepMs, color, classic);
+                    cache.tiles.set(k, tile);
+                    // (the latest 64 kept: about 16 screens' worth)
+                    if (cache.tiles.size > 64)
+                        cache.tiles.delete(cache.tiles.keys().next().value);
+                }
+                if (tile) {
+                    // (on whole device pixels, so the strips meet without a seam)
+                    const x = Math.round(msX(k * tileMs) * ratio) / ratio;
+                    ctx.drawImage(tile, x, 0, TILE, H);
+                }
+            }
+        }
 
-            ctx.beginPath();
-            if (this.settings.classicWaveform) {
+        // one strip of the waveform (see renderWaveform): null where the song has no samples
+        waveTile(wave, fromMs, spanMs, W, H, ratio, offset, stepMs, color, classic) {
+            const first = Math.max(0, Math.floor((fromMs - offset) / stepMs) - 1);
+            const last = Math.min(wave.count, Math.ceil((fromMs + spanMs - offset) / stepMs) + 2);
+            if (last <= first)
+                return null;
+            const c = document.createElement('canvas');
+            c.width = Math.ceil(W * ratio);
+            c.height = Math.ceil(H * ratio);
+            const g = c.getContext('2d');
+            g.scale(ratio, ratio);
+            const px = W / spanMs;
+            const xOf = i => (i * stepMs + offset - fromMs) * px;
+            g.beginPath();
+            if (classic) {
                 for (let i = first; i < last; i++) {
-                    const x = msX(i * stepMs + offset);
                     const y = (2 - Math.max(Math.abs(wave.left[i]), Math.abs(wave.right[i])) * 2) * H / 2;
-                    i === first ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                    i === first ? g.moveTo(xOf(i), y) : g.lineTo(xOf(i), y);
                 }
             } else {
                 for (let i = first; i < last; i++) {
-                    const x = msX(i * stepMs + offset);
+                    const x = xOf(i);
                     if (i === first)
-                        ctx.moveTo(x, (wave.left[i] + 1) * H / 2);
+                        g.moveTo(x, (wave.left[i] + 1) * H / 2);
                     else
-                        ctx.lineTo(x, (wave.left[i] + 1) * H / 2);
-                    ctx.lineTo(x, (wave.right[i] + 1) * H / 2);
+                        g.lineTo(x, (wave.left[i] + 1) * H / 2);
+                    g.lineTo(x, (wave.right[i] + 1) * H / 2);
                 }
             }
-            ctx.strokeStyle = this.color(3);
-            ctx.lineWidth = 0.75;
-            ctx.stroke();
+            g.strokeStyle = color;
+            g.lineWidth = 0.75;
+            g.stroke();
+            return c;
         }
 
         // GuiTrack.PostRender

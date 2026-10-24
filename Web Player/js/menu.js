@@ -422,7 +422,8 @@
 
         let audioElement = null;
         const tempo = SSQESettings.tempoFromSlider(settings.tempo);
-        if (audioFile && (!audioBuffer || Math.abs(tempo - 1) > 1e-6 || mode === 'replay')) {
+        // (at other tempos the decoded song is stretched without changing its pitch, see the editor's stretch.js)
+        if (audioFile && (!audioBuffer || (!window.SSQEStretch && Math.abs(tempo - 1) > 1e-6) || mode === 'replay')) {
             try {
                 audioElement = await SSQEGame.loadAudio(audioFile);
             } catch (err) {

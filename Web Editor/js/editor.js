@@ -1826,6 +1826,22 @@
                 const markers = new Map(), stems = new Map();
                 const markerSize = noteSize * 0.2;
                 let lastBox = -Infinity;
+                // (zoomed far out, with hundreds of notes on screen: a box a quarter of a box from the last, not one
+                // every pixel on top of each other, and labels that don't overlap, about 96 pixels apart, rather than one
+                // every 8 pixels, hundreds of them, new text every frame as it moves)
+                const crowded = high - low > 150;
+                const boxGap = crowded ? noteSize * 0.25 : 1, labelGap = crowded ? 96 : 8;
+                // (and selected ones the same: thousands of selected notes on screen were thousands of boxes and outlines)
+                let lastSel = -Infinity;
+                // (markers on almost the same spot, within half a marker, drawn once; and each colour worked out once)
+                const markerStep = crowded ? Math.max(1, markerSize * G.pixelRatio * 0.5) : 1;
+                const colorMemo = new Map();
+                const memo = (key, make) => {
+                    let v = colorMemo.get(key);
+                    if (v === undefined)
+                        colorMemo.set(key, v = make());
+                    return v;
+                };
                 // (one CSS pixel wide, on whole device pixels, as line() draws it)
                 const stemPx = Math.max(1, Math.round(G.pixelRatio)), stemDevice = stemPx / G.pixelRatio;
                 const stemX = v => (Math.floor(v * G.pixelRatio) + (stemPx % 2 ? 0.5 : 0)) / G.pixelRatio;
@@ -1838,25 +1854,31 @@
 
                     // location marker, note box and mini grid
                     // (a box under a pixel from the last one drawn would only cover it again: skipped, its marker kept)
-                    const box = x - lastBox >= 1 || isHovering || note.selected ? this.trackBox(c, a, noteSize, cellPos) : null;
+                    const showSel = note.selected && x - lastSel >= boxGap;
+                    if (showSel)
+                        lastSel = x;
+                    const box = x - lastBox >= boxGap || isHovering || showSel ? this.trackBox(c, a, noteSize, cellPos) : null;
                     if (box) {
                         ctx.drawImage(box.canvas, x, cellGap, box.w, box.w);
                         lastBox = x;
                     }
-                    const mk = this.noteColor(c, a);
+                    const mk = memo(c * 2 + (a < 1 ? 1 : 0), () => this.noteColor(c, a));
                     let path = markers.get(mk);
-                    if (!path)
+                    if (!path) {
                         markers.set(mk, path = new Path2D());
-                    // (one exactly on top of the last of its colour, to the device pixel, isn't drawn twice)
+                        path.keys = new Set();
+                    }
+                    // (one exactly on top of another of its colour, to the device pixel, isn't drawn twice)
                     const mx0 = x + cellPos(2 - note.x), my0 = cellGap + cellPos(2 - note.y);
-                    const mKey = Math.round(mx0 * G.pixelRatio) * 100003 + Math.round(my0 * G.pixelRatio);
-                    if (path.last !== mKey) {
+                    const mKey = Math.round(mx0 * G.pixelRatio / markerStep) * 100003 + Math.round(my0 * G.pixelRatio / markerStep);
+                    if (!path.keys.has(mKey)) {
                         path.rect(mx0, my0, markerSize, markerSize);
-                        path.last = mKey;
+                        path.keys.add(mKey);
                     }
 
                     // text line
-                    const lc = this.color(4, !this.hoveringObject || isHovering ? a : 0.35);
+                    const la = !this.hoveringObject || isHovering ? a : 0.35;
+                    const lc = memo(-1 - la, () => this.color(4, la));
                     let stem = stems.get(lc);
                     if (!stem)
                         stems.set(lc, stem = new Path2D());
@@ -1869,7 +1891,7 @@
 
                     if (isHovering)
                         this.strokeBox(x - 4, cellGap - 4, noteSize + 8, noteSize + 8, this.color(5));
-                    else if (note.selected) {
+                    else if (showSel) {
                         if (dragging)
                             this.line(msX(note.dragStartMs), 0, msX(note.dragStartMs), H, this.color(7));
                         else
@@ -1890,7 +1912,7 @@
 
                     isHovering ||= dragging && note.selected;
 
-                    if (x - 8 > lastRenderedText || isHovering) {
+                    if (x - labelGap > lastRenderedText || isHovering) {
                         labels.push({ x: x + 3, a: `Note ${fmtInt(i + 1)}`, b: `${fmtInt(note.ms)}ms`, hover: isHovering });
                         lastRenderedText = x;
                     }
@@ -2012,6 +2034,26 @@
             const beatTickGap = H - noteSize - cellGap;
             const points = map.timingPoints;
             const bpmLabels = [];
+            // (web only, for speed: the beat ticks gathered into one path a colour and drawn at once, at most one a device
+            // pixel, rather than a line drawn on its own for every beat, half beat and sub-beat on screen: zoomed out,
+            // thousands of them)
+            const ticks = new Map(), pointLines = [];
+            const tickRatio = G.pixelRatio, tickPx = Math.max(1, Math.round(tickRatio));
+            const tick = (x, y1, y2, color) => {
+                if (x < -1 || x > W + 1)
+                    return;
+                let t = ticks.get(color);
+                if (!t)
+                    ticks.set(color, t = { path: new Path2D(), cols: new Set() });
+                const col = Math.floor(x * tickRatio);
+                const key = col * 4 + (y1 === H ? 0 : 1) * 2 + (y2 === H ? 1 : 0);
+                if (t.cols.has(key))
+                    return;
+                t.cols.add(key);
+                const sx = (col + (tickPx % 2 ? 0.5 : 0)) / tickRatio;
+                t.path.moveTo(sx, y1);
+                t.path.lineTo(sx, y2);
+            };
 
             for (let i = 0; i < points.length; i++) {
                 const point = points[i];
@@ -2039,13 +2081,14 @@
                         const j0 = Math.max(0, Math.floor(visStart / msInc) - 1);
                         const j1 = Math.min(numBeats, Math.ceil(visEnd / msInc) + 1);
 
+                        const beatColor = this.color(1), halfColor = this.color(2), subColor = this.color(0);
                         for (let j = j0; j < j1; j++) {
                             const x = startX + msInc * (j + 1) * msToPx;
-                            this.line(x, H, x, H - beatTickGap, this.color(1));
+                            tick(x, H, H - beatTickGap, beatColor);
                         }
                         for (let j = j0; j < Math.min(numHalf, j1); j++) {
                             const x = startX + (msInc * j + halfInc) * msToPx;
-                            this.line(x, H - 3 * beatTickGap / 5, x, H, this.color(2));
+                            tick(x, H - 3 * beatTickGap / 5, H, halfColor);
                         }
 
                         // sub-beat ticks (same stepping as the original instancing loop)
@@ -2061,20 +2104,31 @@
                                 if (x > W)
                                     break;
                                 if (x >= 0)
-                                    this.line(x, H - 3 * beatTickGap / 10, x, H, this.color(0));
+                                    tick(x, H - 3 * beatTickGap / 10, H, subColor);
                             }
                         }
                     }
                 }
 
-                this.line(startX, 0, startX, H * 1.95, this.color(8));
-                if (this.hoveringObject === point)
-                    this.strokeBox(startX - 4, H, H, H, this.color(5));
-                else if (map.selectedPoint === point)
-                    this.strokeBox(startX - 4, H, H, H, this.color(6));
+                // (over the ticks, drawn after them below)
+                pointLines.push(() => {
+                    this.line(startX, 0, startX, H * 1.95, this.color(8));
+                    if (this.hoveringObject === point)
+                        this.strokeBox(startX - 4, H, H, H, this.color(5));
+                    else if (map.selectedPoint === point)
+                        this.strokeBox(startX - 4, H, H, H, this.color(6));
+                });
 
                 bpmLabels.push({ x: startX + 3, a: `${+point.bpm.toFixed(3)} BPM`, b: `${fmtInt(point.ms)}ms` });
             }
+
+            ctx.lineWidth = tickPx / tickRatio;
+            for (const [color, t] of ticks) {
+                ctx.strokeStyle = color;
+                ctx.stroke(t.path);
+            }
+            for (const draw of pointLines)
+                draw();
 
             // static lines: song start, song end, cursor
             this.line(msX(0), 0, msX(0), H, this.color(1));

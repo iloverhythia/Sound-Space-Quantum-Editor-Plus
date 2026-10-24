@@ -606,18 +606,33 @@ void main()
             return this.state === 'playing';
         }
 
+        // (at speeds other than 100% too: stretched without changing its pitch, see the editor's stretch.js, where the
+        // <audio> element's own stretching warbled at low speeds and its clock was corrected with jumps, so the notes
+        // stuttered)
         get useBuffer() {
-            return !!this.buffer && (!this.el || Math.abs(this.tempo - 1) < 1e-6);
+            return !!this.buffer && (!this.el || Math.abs(this.tempo - 1) < 1e-6 || !!window.SSQEStretch);
         }
 
         startBuffer() {
             this.stopBuffer();
+            if (Math.abs(this.tempo - 1) >= 1e-6 && window.SSQEStretch) {
+                const stream = new SSQEStretch.Stream(this.ctx, this.gain, this.buffer, this.tempo, clamp(this.pos, 0, this.duration));
+                stream.start();
+                this.node = stream;
+                this.clock = null;
+                this.basePos = this.pos;
+                this.basePerf = performance.now();
+                this.baseCtx = stream.startTime;
+                this.started = true;
+                return;
+            }
             const node = this.ctx.createBufferSource();
             node.buffer = this.buffer;
             node.playbackRate.value = this.tempo;
             node.connect(this.gain);
             node.start(0, clamp(this.pos, 0, this.duration));
             this.node = node;
+            this.clock = null;
             this.basePos = this.pos;
             this.basePerf = performance.now();
             this.baseCtx = this.ctx.currentTime;
@@ -660,7 +675,13 @@ void main()
 
             if (this.node) {
                 // the audio clock while it runs, the system clock if the context is suspended (iOS interruptions)
-                const elapsed = this.ctx.state === 'running' ? this.ctx.currentTime - this.baseCtx : (performance.now() - this.basePerf) / 1000;
+                // (on a steady clock over the audio's, which only moves on in steps, see stretch.js steadyClock)
+                let elapsed = this.ctx.state !== 'running' ? (performance.now() - this.basePerf) / 1000
+                    : this.node.elapsed ? this.node.elapsed() : this.ctx.currentTime - this.baseCtx;
+                if (this.ctx.state === 'running' && window.SSQEStretch) {
+                    this.clock = this.clock || SSQEStretch.steadyClock();
+                    elapsed = this.clock(elapsed);
+                }
                 let p = this.basePos + elapsed * this.tempo;
                 if (p >= this.duration) {
                     this.ended = true;

@@ -146,15 +146,27 @@
                 .catch(e => console.warn('Waveform decode failed', e));
         }
 
-        // web only: <audio> seeking is inexact for many mp3s (especially in Safari), so at 100% tempo the decoded
-        // audio is played instead, which lands exactly where the timeline says
+        // web only: <audio> seeking is inexact for many mp3s (especially in Safari), so once the song is decoded it's
+        // played from that instead, which lands exactly where the timeline says; at other speeds stretched to them
+        // without changing its pitch (stretch.js), smooth at any speed where the <audio> element's own stretching
+        // warbles at low speeds and only says where it is every so often
         get useBuffer() {
-            return !!this.buffer && Math.abs(this.tempo - 1) < 1e-6;
+            return !!this.buffer && (Math.abs(this.tempo - 1) < 1e-6 || !!window.SSQEStretch);
         }
 
         startBuffer() {
             this.stopBuffer();
             const ac = audioContext();
+            if (Math.abs(this.tempo - 1) >= 1e-6) {
+                const stream = new SSQEStretch.Stream(ac, this.gain, this.buffer, this.tempo, Math.min(Math.max(this.pos, 0), this.duration));
+                stream.start();
+                this.node = stream;
+                this.basePos = this.pos;
+                this.basePerf = performance.now();
+                this.baseCtx = stream.startTime;
+                this.started = true;
+                return;
+            }
             const node = ac.createBufferSource();
             node.buffer = this.buffer;
             node.connect(this.gain);
@@ -227,7 +239,8 @@
                     ac.resume && ac.resume().catch(() => { });
                     return this.steady(null);
                 }
-                const p = this.steady(this.basePos + (ac.currentTime - this.baseCtx) * this.tempo);
+                const elapsed = this.node.elapsed ? this.node.elapsed() : ac.currentTime - this.baseCtx;
+                const p = this.steady(this.basePos + elapsed * this.tempo);
                 if (p >= this.duration)
                     this.ended = true;
                 return Math.min(p, this.duration);

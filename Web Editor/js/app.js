@@ -1385,9 +1385,9 @@
             });
 
             // the decoded song plays exactly and needs no <audio> element (which iOS won't load or start without a
-            // tap); the element is only needed to keep the pitch at other tempos
+            // tap), at other tempos too (stretched without changing its pitch, stretch.js)
             const audioBuffer = editor.music.buffer;
-            const needElement = !audioBuffer || Math.abs(SSQESettings.tempoFromSlider(map.tempoSlider) - 1) > 1e-6;
+            const needElement = !audioBuffer || (!window.SSQEStretch && Math.abs(SSQESettings.tempoFromSlider(map.tempoSlider) - 1) > 1e-6);
             const blob = needElement ? await this.storage.getAudio(map.soundId) : null;
             const audioElement = blob ? await SSQEGame.loadAudio(blob).catch(() => null) : null;
 

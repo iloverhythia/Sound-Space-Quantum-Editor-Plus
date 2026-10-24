@@ -2,6 +2,24 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.36 - 10/24/2026 --
+
+- PLAYBACK SPEED under (or over) 100%, in the editor and the map player: smooth now. The song used to be slowed down
+  by the browser's <audio> element, which at low speeds sounds warbly and glitchy and only says where it is every so
+  often, so the timeline and the notes stuttered and ran behind (at 50% the timeline went at 44%, at 25% at 18% with
+  frames where it stood still). Now the song is stretched here without changing its pitch, the way the original
+  editor's audio library does it (SoundTouch's method), a second at a time just ahead of where it's playing, and
+  played on the audio clock: the timeline moves at exactly the speed set, evenly (frame to frame it varied by 30-54%,
+  now 2-3%), at any speed from 10% to 200%
+- MAP PLAYER: its notes run on a steady clock over the audio's (which only moves on in steps), at 100% too: the
+  notes no longer judder (frame to frame they varied by 19%, now 5%)
+- TIMELINE zoomed out with lots of notes on it: no longer lags. Its beat ticks are drawn together instead of
+  thousands of lines one by one, the note boxes, selected notes and markers that would only cover each other again
+  are drawn once, and the labels are spaced out so they can be read instead of hundreds piled on top of each other.
+  A busy map zoomed all the way out: 60ms a frame to 34ms; with 10,000 more notes (selected): 370ms to 41ms. Zoomed
+  in, it looks exactly as it did
+
+----------------------------------
    -- Plus 3.0.35 - 10/23/2026 --
 
 - SPEED, especially on a MacBook (a 120Hz screen at twice the pixels): measured at a MacBook's size and pixel density

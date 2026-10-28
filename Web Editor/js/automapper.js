@@ -33,6 +33,20 @@ window.SSQEAutoMapper = (function () {
     const GRID = [0, 2];
     // (as far as the editor lets quantum notes go)
     const QUANTUM = [-0.85, 2.85];
+    // STOP (the button under BACK TO MENU while it auto maps): asked for, the auto mapping in progress ends at its
+    // next pause with an error marked .stopped (the notes it had placed so far were shown through opts.preview)
+    let stopAsked = false, running = false;
+    const stop = () => {
+        if (running)
+            stopAsked = true;
+    };
+    const checkStop = () => {
+        if (running && stopAsked) {
+            const err = new Error('Auto mapping stopped');
+            err.stopped = true;
+            throw err;
+        }
+    };
 
     // the 8 ways to turn or mirror the 3x3 grid around its middle (1, 1); INV[k] undoes SYM[k]
     const SYM = [
@@ -369,6 +383,7 @@ window.SSQEAutoMapper = (function () {
                 }
                 if ((i & 0xfffff) === 0xfffff)
                     await new Promise(r => setTimeout(r));
+                    checkStop();
             }
             const floor = percentile(e5, 0.9) * 1e-3 + 1e-12;
             // energy over the 20ms starting `LEAD` ms into a frame (so a kick lands on the same frame as everything
@@ -488,6 +503,7 @@ window.SSQEAutoMapper = (function () {
             if (g % 400 === 399) {
                 progress(`LISTENING TO THE SONG ${Math.round(g / frames * 100)}%`);
                 await new Promise(r => setTimeout(r));
+                checkStop();
             }
         }
 
@@ -923,6 +939,15 @@ window.SSQEAutoMapper = (function () {
                 sum += a.loudness[f];
             return c ? sum / c : 0;
         };
+        // (each bar's sound, worked out once)
+        const prints = new Map();
+        const printOf = j => {
+            if (j < 0 || j >= bars.length)
+                return null;
+            if (!prints.has(j))
+                prints.set(j, soundPrint(a, bars[j].from, bars[j].to, bars[j].beatLen));
+            return prints.get(j);
+        };
         // the bars already mapped (wholly outside the part being mapped, with a couple of notes or more)
         const sources = [];
         bars.forEach((b, j) => {
@@ -930,36 +955,61 @@ window.SSQEAutoMapper = (function () {
                 return;
             const notes = notesIn(b.from, b.to);
             if (notes.length >= 2)
-                sources.push({ j, b, notes, print: soundPrint(a, b.from, b.to, b.beatLen), loud: loudIn(b.from, b.to) });
+                sources.push({ j, b, notes, print: printOf(j), loud: loudIn(b.from, b.to) });
         });
+        // How alike two bars sound, the bars either side counting too: a bar that sounds like one in your drop, with
+        // the drop's bars around it too, is more likely the same place in the song than one that sounds like it on
+        // its own somewhere else (so the second drop is mapped from the first, not from a build-up that happens to
+        // have the same beat)
+        const around = (j, sj) => {
+            let sum = 0, w = 0;
+            for (const d of [-1, 1]) {
+                const p = printOf(j + d), q = printOf(sj + d);
+                if (p && q) {
+                    sum += printSameness(p, q);
+                    w++;
+                }
+            }
+            return w ? sum / w : null;
+        };
         if (!sources.length)
             return [];
         const thr = 0.8 - 0.35 * level;
         const out = [];
+        // (the bars nothing is alike enough to: how many notes you put in the three parts that sound most like each,
+        // for the auto mapper's own notes there to be as busy as yours, see generate)
+        out.fill = [];
         const usedCount = new Map();
         let lastJ = -9;
-        for (const b of bars) {
+        for (let bj = 0; bj < bars.length; bj++) {
+            const b = bars[bj];
             // (bars wholly inside what's being mapped)
             if (b.from < opts.startMs - 15 || b.to > opts.endMs + 15)
                 continue;
-            const mine = soundPrint(a, b.from, b.to, b.beatLen), loud = loudIn(b.from, b.to);
+            const mine = printOf(bj), loud = loudIn(b.from, b.to);
             const mineCount = times.filter(t => t >= b.from - 15 && t < b.to - 15).length;
             let best = null;
+            const closest = [];
             for (const sb of sources) {
-                const sim = printSameness(mine, sb.print) - 0.6 * Math.abs(loud - sb.loud);
+                const own = printSameness(mine, sb.print), ctxSim = around(bj, sb.j);
+                const sim = (ctxSim === null ? own : 0.75 * own + 0.25 * Math.max(own - 0.2, ctxSim)) - 0.6 * Math.abs(loud - sb.loud);
+                closest.push([sim, sb.notes.length * (b.to - b.from) / Math.max(1, sb.b.to - sb.b.from)]);
                 if (sim < thr - 0.05)
                     continue;
                 // (the next bar of the phrase being copied, a little preferred; one bar used over and over, a little
                 // less, so a loop that comes round many times isn't all the same bar; and of bars that sound alike,
                 // one with about as many notes as are wanted here, which from 90%, its notes being taken over as they
                 // are, counts for much less than how it sounds)
-                const score = sim + (sb.j === lastJ + 1 ? 0.06 : 0) - 0.03 * (usedCount.get(sb.j) || 0)
+                const score = sim + (sb.j === lastJ + 1 ? 0.06 + 0.08 * level : 0) - 0.03 * (usedCount.get(sb.j) || 0)
                     - ((level >= 0.9 ? 0.05 : 0.12) * Math.abs(Math.log((sb.notes.length + 1) / (mineCount + 1))));
                 if (!best || score > best.score)
                     best = { sb, sim, score };
             }
             if (!best || best.sim < thr) {
                 lastJ = -9;
+                const top = closest.sort((p, q) => q[0] - p[0]).slice(0, 3);
+                if (top.length)
+                    out.fill.push({ from: b.from, to: b.to, want: top.reduce((sum, c) => sum + c[1], 0) / top.length });
                 continue;
             }
             const { sb } = best;
@@ -4566,12 +4616,27 @@ window.SSQEAutoMapper = (function () {
         // The best way to turn or mirror a set of points (base: [x, y] for the notes from times[i] on) so it joins on
         // to the notes before; extra(k): what else each way costs. Null if no way can be played (loose: none is ruled
         // out, the hard ones just cost more).
-        const fitAt = (base, qi, extra, loose) => {
+        // shifts: [dx, dy, cost] moves of the whole set tried as well (kept inside the playfield); keepPace: the move
+        // onto the set to be about as quick as the moves before it and its own first move (no sudden burst of speed
+        // between two parts)
+        const fitAt = (base, qi, extra, loose, shifts, keepPace) => {
             const J = jumpAt(times[i]), flow = (opts.runOptions && opts.runOptions.flow) ?? 0.7;
             let best = null;
+            const [blo, bhi] = qi ? QUANTUM : [0, 2];
+            for (const [sx, sy, sc] of shifts || [[0, 0, 0]])
             for (let k = 0; k < 8; k++) {
-                const pos = base.map(([bx, by]) => SYM[k](bx, by));
-                let cost = 0.3 * Math.random() + extra(k);
+                const pos = base.map(([bx, by]) => { const [px, py] = SYM[k](bx, by); return [px + sx, py + sy]; });
+                if ((sx || sy) && pos.some(([px, py]) => px < blo - 1e-6 || px > bhi + 1e-6 || py < blo - 1e-6 || py > bhi + 1e-6))
+                    continue;
+                let cost = 0.3 * Math.random() + extra(k) + sc;
+                if (keepPace && prev && pos.length >= 2) {
+                    const g0 = Math.max(15, times[i] - prev.ms), g1 = Math.max(15, times[i + 1] - times[i]);
+                    const s0 = Math.hypot(pos[0][0] - prev.x, pos[0][1] - prev.y) / g0;
+                    const own = Math.hypot(pos[1][0] - pos[0][0], pos[1][1] - pos[0][1]) / g1;
+                    const before = prev2 ? Math.hypot(prev.x - prev2.x, prev.y - prev2.y) / Math.max(15, prev.ms - prev2.ms) : own;
+                    const ref = Math.max(0.0005, (own + before) / 2);
+                    cost += 2.5 * Math.max(0, Math.abs(Math.log((s0 + 0.0005) / ref)) - Math.log(1.6));
+                }
                 if (prev) {
                     const [x0, y0] = pos[0];
                     const d0 = Math.hypot(x0 - prev.x, y0 - prev.y), g0 = Math.max(1, times[i] - prev.ms);
@@ -4716,10 +4781,19 @@ window.SSQEAutoMapper = (function () {
             // on, and even as it was if only that flows; and taken over even where it joins on less well)
             const near = (opts.similarLevel || 0) >= 0.9;
             const extra = k => phrase ? (k === lastTake.k ? -1 : 0.4) : k === 0 ? (near ? 0.15 : 0.4) : 0;
-            let best = fitAt(g.pts.map(pt => [pt.x, pt.y]), qi, extra);
+            // (moved across the playfield as well where that joins on better: a cell at a time on the grid, a third of
+            // one in quantum parts, a little dearer the further)
+            const step = qi ? 1 / 3 : 1, shifts = [];
+            for (let dx = -2; dx <= 2; dx++)
+                for (let dy = -2; dy <= 2; dy++)
+                    shifts.push([dx * step, dy * step, 0.35 * Math.hypot(dx, dy)]);
+            const base = g.pts.map(pt => [pt.x, pt.y]);
+            let best = fitAt(base, qi, extra, false, shifts, true), loose = false;
             // (from 90%, a part that no way joins on cleanly is still taken over, the way that joins on least badly)
-            if (!best && near)
-                best = fitAt(g.pts.map(pt => [pt.x, pt.y]), qi, extra, true);
+            if (!best && near) {
+                best = fitAt(base, qi, extra, true, shifts, true);
+                loose = true;
+            }
             if (!best || best.cost > (near ? 40 : 6))
                 return false;
             // (and a quantum part, whose notes aren't on the grid anyway, turned a few degrees more round the middle,
@@ -4736,7 +4810,7 @@ window.SSQEAutoMapper = (function () {
                     theta = 0;
             }
             if (opts.trace)
-                opts.trace.push({ ms: times[i], name: 'similar', k: best.k, len: pos.length, from: g.m.srcFrom });
+                opts.trace.push({ ms: times[i], name: 'similar', k: best.k, len: pos.length, from: g.m.srcFrom, loose, cost: best.cost });
             for (const [x, y] of pos) {
                 const note = { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, ms: times[i] };
                 // (kept as they are when a star rating is met by taking notes out, see trimToStars)
@@ -4982,7 +5056,7 @@ window.SSQEAutoMapper = (function () {
         const bounds = (opts.boundaries || []).slice().sort((p, q) => p - q);
         let bi = 0, fresh = false, ci = 0;
         while (i < times.length) {
-            await yieldNow(i / times.length);
+            await yieldNow(i / times.length, out);
             turn(out, locked);
             while (bi < bounds.length && bounds[bi] <= times[i]) {
                 bi++;
@@ -5260,7 +5334,9 @@ window.SSQEAutoMapper = (function () {
     //         calm (0..1: how many notes calm parts like intros and breakdowns get),
     //         quantum (allow notes off the 3x3 grid), timing ([{ bpm, ms }] from the map, if it has any),
     //         before (the notes just before startMs), styleNotes (the map's own notes: their patterns are preferred),
-    //         avoid (times already taken), progress (text => void) }
+    //         avoid (times already taken), progress (text => void), preview (notes => void: the notes placed so far,
+    //         every so often while it works; a new try starts again from none) }
+    // stop() ends it early: the promise rejects with an error marked .stopped.
     // Resolves to the notes, with .info = { bpm, offsetMs, steady (when the BPM was detected), sections }.
     // The star rating a map at each difficulty usually comes out at (1 to 10; Rhythia's SR, see starrating.js), for the
     // first guess at the difficulty a star rating asks for
@@ -5281,6 +5357,17 @@ window.SSQEAutoMapper = (function () {
     // taking out notes, the ones that make it hardest on the weakest sounds first (fast moves in and out of a quiet
     // note), never inside a stream if a jump will do. Without a target the map is made once and its rating noted.
     async function generate(opts) {
+        stopAsked = false;
+        running = true;
+        try {
+            return await generateRun(opts);
+        } finally {
+            running = false;
+            stopAsked = false;
+        }
+    }
+
+    async function generateRun(opts) {
         const rate = window.SSQEStarRating && window.SSQEStarRating.rate;
         const target = +opts.stars;
         if (!(target > 0) || !rate || opts.count > 0) {
@@ -5289,6 +5376,12 @@ window.SSQEAutoMapper = (function () {
                 notes.info.stars = rate(notes);
             return notes;
         }
+        // Like This Map from 90% (your notes taken over as they were): the star rating is what your notes make it,
+        // not the one asked for. Aiming the whole stretch at the stars asked for made the parts it maps itself, between
+        // the ones taken over, as easy as they could be whenever yours were already over it (easy notes in the middle
+        // of a drop). Instead they're made as busy as you made the parts that sound most like them.
+        if ((+opts.similarity || 0) >= 0.9 && (opts.similarNotes || []).length >= 4)
+            return generateLikeMap(opts, target, rate);
         const js = opts.jumpScale || 1, dens = opts.density || 1;
         // (past 20, when the song's own sounds can't make it that hard, as with a short stretch of a song: a note on every
         // beat, then every half, third, quarter, sixth, eighth, twelfth and sixteenth of one, as spaced-out flowing
@@ -5358,6 +5451,53 @@ window.SSQEAutoMapper = (function () {
         notes.info = { ...keep.notes.info, stars: trimmed.sr, difficulty: keep.u, target, search: tried.map(x => [+x.u.toFixed(2), +x.sr.toFixed(2)]) };
         if (opts.trace && keep.trace)
             opts.trace.push(...keep.trace);
+        return notes;
+    }
+
+    async function generateLikeMap(opts, target, rate) {
+        const progress = opts.progress || (() => { });
+        const at = u => u > 10 ? { difficulty: 10, jumpScale: (opts.jumpScale || 1) * (1 + 0.12 * (u - 10)), density: (opts.density || 1) * (1 + 0.25 * (u - 10)), force: true }
+            : u < 1 ? { difficulty: 1, density: (opts.density || 1) * Math.max(0.3, u) } : { difficulty: u };
+        const make = async (u, label, tries) => {
+            const trace = opts.trace ? [] : undefined;
+            const notes = await generateAt({ ...opts, ...at(u), trace, tries, progress: text => progress(`MAPPING LIKE THIS MAP (${label}) - ${text}`) });
+            return { u, notes, trace };
+        };
+        // (how many notes it put in the bars it mapped itself, against how many you'd have put there)
+        const fillOf = notes => {
+            const bars = (notes.info && notes.info.fill) || [];
+            let got = 0, want = 0;
+            for (const b of bars) {
+                want += b.want;
+                got += notes.filter(n => !n.similar && n.ms >= b.from - 15 && n.ms < b.to - 15).length;
+            }
+            return { got, want };
+        };
+        let u = Math.max(1, Math.min(10, difficultyFor(target)));
+        let lo = 0.3, hi = 20, keep = null;
+        for (let t = 0; t < 8; t++) {
+            const r = await make(u, `TRY ${t + 1}`, 1);
+            const { got, want } = fillOf(r.notes);
+            r.err = want > 0 ? Math.abs(Math.log((got + 1) / (want + 1))) : 0;
+            if (!keep || r.err < keep.err)
+                keep = r;
+            if (want <= 0 || r.err < 0.12)
+                break;
+            if (got < want)
+                lo = u;
+            else
+                hi = u;
+            const next = got < want && hi >= 20 ? Math.min(20, u * 1.6 + 0.5) : (lo + hi) / 2;
+            if (Math.abs(next - u) < 0.1)
+                break;
+            u = next;
+        }
+        // made properly at that setting (several passes, the most balanced kept)
+        const done = await make(keep.u, 'FINISHING', undefined);
+        const notes = done.notes;
+        notes.info = { ...notes.info, stars: rate(notes), difficulty: keep.u, target, likeMap: true };
+        if (opts.trace && done.trace)
+            opts.trace.push(...done.trace);
         return notes;
     }
 
@@ -5562,8 +5702,9 @@ window.SSQEAutoMapper = (function () {
         if (!opts.quantum && (!opts.patterns || opts.patterns === 'mixed') && opts.jumpShare !== undefined && (opts.jumpShare <= 0 || opts.jumpShare >= 1))
             opts = { ...opts, patterns: opts.jumpShare <= 0 ? 'streams' : 'jumps' };
         const progress = opts.progress || (() => { });
-        const tick = () => new Promise(r => setTimeout(r));
+        const tick = () => new Promise(r => setTimeout(r)).then(checkStop);
         const a = await analyse(opts.buffer, progress);
+        checkStop();
         const difficulty = Math.min(10, Math.max(1, opts.difficulty || 5));
         // 1 = ~1.5 notes a second on average, 5 = ~5.5, 8 = ~17, 10 = ~27 asked for (about 15-24 comes out, like
         // human Tasukete maps at 15-26: the busiest bars keep a rhythm rather than filling every position). Hard maps
@@ -6033,10 +6174,13 @@ window.SSQEAutoMapper = (function () {
             progress(label);
             await tick();
             let last = performance.now();
-            const yieldNow = async done => {
+            // (and shows the notes placed so far, see opts.preview)
+            const yieldNow = async (done, sofar) => {
                 if (performance.now() - last < 25)
                     return;
                 progress(`${label} ${Math.floor(done * 100)}%`);
+                if (opts.preview && sofar)
+                    opts.preview(sofar);
                 await tick();
                 last = performance.now();
             };
@@ -6058,6 +6202,7 @@ window.SSQEAutoMapper = (function () {
             bpm: detected && detected.bpm, offsetMs: detected && detected.offsetMs, steady: !!(detected && detected.steady), times: times.length,
             quantumParts: qParts.map(x => ({ from: x.from, to: x.to, kind: x.gen ? 'quantum' : 'curves' })), quantumDesign: qp ? qp.maps : null,
             similar: similar.map(m => ({ from: m.from, to: m.to, srcFrom: m.srcFrom, sim: +m.sim.toFixed(2), take: m.take })),
+            fill: similar.fill || [],
             bars: ctx.bars ? ctx.bars.length : 0, repeats: ctx.bars ? ctx.bars.filter(b => b.proto >= 0).length : 0, barList: ctx.bars,
             sections: sections.map(s => ({ from: s.from, to: s.to, level: +s.level.toFixed(2), drop: s.drop, change: s.change, rate: s.rate && +s.rate.toFixed(1), nps: s.nps && +s.nps.toFixed(1) })),
         };
@@ -6132,5 +6277,5 @@ window.SSQEAutoMapper = (function () {
     }
 
     load();
-    return { learn, learnFiles, stats, statsSync, reset, generate, analyse, findTempo, findEvents, trimToStars, detectBpm, quantumStyleOf: notes => quantumStyleOf(toEntry(notes)) };
+    return { learn, learnFiles, stats, statsSync, reset, generate, stop, analyse, findTempo, findEvents, trimToStars, detectBpm, quantumStyleOf: notes => quantumStyleOf(toEntry(notes)) };
 })();

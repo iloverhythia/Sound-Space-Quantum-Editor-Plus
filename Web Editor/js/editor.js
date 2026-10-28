@@ -156,11 +156,12 @@
             this.awakeUntil = Math.max(this.awakeUntil || 0, performance.now() + ms);
         }
 
-        toast(text, kind = 'info') {
-            this.keepAwake(2200);
+        // seconds: how long it stays up (Infinity: until the next toast, for progress while something works)
+        toast(text, kind = 'info', seconds = 2) {
+            this.keepAwake(Math.min(seconds, 10) * 1000 + 200);
             const s = this.settings;
             const color = kind === 'warn' ? s.color2 : kind === 'error' ? [255, 200, 0] : kind === 'other' ? [255, 109, 0] : s.color1;
-            this.ui && this.ui.Toast.show(text, color);
+            this.ui && this.ui.Toast.show(text, color, seconds);
         }
 
         // ------------------------------------------------------------ music helpers (MusicPlayer.Play/Pause)

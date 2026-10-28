@@ -2,6 +2,25 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.38 - 10/28/2026 --
+
+- AUTO MAPPING shows the notes as it places them: they appear on the grid and the timeline while it works. Each
+  try rewrites them from the start as it goes
+- STOP AUTO MAPPING button, under BACK TO MENU while it works: stops it, and the notes it had placed stay in the map,
+  selected, to delete or keep (Ctrl+Z takes them out too)
+- NOTIFICATIONS while auto mapping (and detecting the BPM, and learning from maps) show properly: each step used to
+  start sliding in again before the last had finished, so they hardly showed, and the result vanished at once when
+  the editor had been busy. Steps now stay up until the next one, and the result stays for 5 seconds
+- AUTO MAP LIKE THIS MAP at 90% to 100%:
+  - the parts it maps itself, between parts taken from your map, are made as busy as you made the parts that sound
+    most like them. They used to be aimed at the star target, so when your notes were already harder than that they
+    came out as easy as possible, even in the middle of a drop. From 90%, the star rating is what your notes make it
+  - it finds the matching part of your map better: the bars either side are compared too, so a drop is mapped from
+    your drop and not from another part with the same beat, and it follows your phrase bar after bar
+  - your parts are moved across the playfield as well as turned or mirrored, so they join on without sudden bursts
+    of speed or snapping back that your map doesn't do
+
+----------------------------------
    -- Plus 3.0.37 - 10/28/2026 --
 
 - PLACE NOTES OVER OTHER NOTES (OPTIONS tab, web editor): clicking or dragging on the grid always places notes, also

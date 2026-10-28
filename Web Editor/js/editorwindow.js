@@ -88,6 +88,20 @@
 
         // fills from the timeline's position up to the next note (or the end of the song)
         let autoMapping = false;
+        // (web only: the notes it has placed so far, shown on the map while it works, not undoable until it's done)
+        let preview = [], previewAt = 0;
+        const setPreview = notes => {
+            if (preview.length)
+                map.notes.removeAll(preview);
+            preview = notes;
+            map.autoMapPreview = notes.length > 0;
+            if (notes.length) {
+                map.notes.items.push(...notes);
+                map.notes.sort();
+            } else
+                map.changed();
+            editor.keepAwake(400);
+        };
         const autoMap = async () => {
             if (!window.SSQEAutoMapper)
                 return;
@@ -106,11 +120,25 @@
             const end = next ? next.ms : Math.trunc(editor.totalTime);
             const before = notes.filter(n => n.ms <= start).slice(-2).map(n => ({ x: n.x, y: n.y, ms: n.ms }));
             autoMapping = true;
-            editor.toast('AUTO MAPPING...', 'other');
+            editor.toast('AUTO MAPPING...', 'other', Infinity);
             try {
                 const timing = map.timingPoints.filter(p => p.bpm > 0).map(p => ({ bpm: p.bpm, ms: p.ms })).sort((p, q) => p.ms - q.ms);
                 const made = await SSQEAutoMapper.generate({
-                    progress: text => editor.toast(text, 'other'),
+                    // (shown until the next step's, or the result's)
+                    progress: text => editor.toast(text, 'other', Infinity),
+                    // (the notes going down as it places them)
+                    preview: sofar => {
+                        const now = performance.now();
+                        if (now - previewAt < 90)
+                            return;
+                        previewAt = now;
+                        const fresh = sofar.filter(n => n.ms >= start && n.ms <= end && Number.isFinite(n.x) && Number.isFinite(n.y))
+                            .map(n => Object.assign(new SSQE.Note(n.x, n.y, n.ms), { auto: true }));
+                        // (each try starts again from the start: the last try's notes stay ahead of where this one has
+                        // got to, so the notes are rewritten as it goes rather than vanishing)
+                        const upTo = fresh.length ? fresh[fresh.length - 1].ms : -Infinity;
+                        setPreview(fresh.concat(preview.filter(n => n.ms > upTo + 5)));
+                    },
                     buffer, startMs: start, endMs: end, density: (s.autoMapDensity ?? 100) / 100, difficulty: s.autoMapDifficulty ?? 5,
                     stars: s.autoMapStars ?? 5,
                     timing,
@@ -136,6 +164,7 @@
                 });
                 // no BPM yet and the song keeps a steady beat: the detected BPM becomes the map's timing point, so the
                 // beat lines match what was mapped
+                setPreview([]);
                 const info = made.info || {};
                 let bpmText = '';
                 if (!timing.length && info.bpm) {
@@ -146,7 +175,7 @@
                         bpmText = ` - ABOUT ${info.bpm} BPM${info.steady ? '' : ' (NOT STEADY, NOT SET)'}`;
                 }
                 if (!made.length)
-                    editor.toast(`NOTHING TO MAP HERE${bpmText}`, 'other');
+                    editor.toast(`NOTHING TO MAP HERE${bpmText}`, 'other', 5);
                 else {
                     // (marked as the auto mapper's, so saving the map doesn't teach the auto mapper its own notes)
                     map.notes.addObjects('AUTO MAP', made.map(n => Object.assign(new SSQE.Note(n.x, n.y, n.ms), { auto: true })));
@@ -155,10 +184,22 @@
                     // (a target the song can't reach at a playable speed: as hard as it goes, said so)
                     const aim = s.autoMapCount > 0 ? 0 : s.autoMapStars ?? 5;
                     const sr = info.stars > 0 ? ` - ${info.stars.toFixed(2)} STARS${aim && info.stars < aim - 0.05 ? ' (AS HARD AS THIS SONG GOES)' : ''}` : '';
-                    editor.toast(`AUTO MAPPED ${made.length} NOTES${sr}${short}${bpmText}`, 'other');
+                    editor.toast(`AUTO MAPPED ${made.length} NOTES${sr}${short}${bpmText}`, 'other', 5);
                 }
             } catch (err) {
-                app.dialogs.message(`Auto mapping failed: ${err.message}`, 'Error');
+                const kept = preview;
+                setPreview([]);
+                if (err && err.stopped) {
+                    // STOP: what it had placed stays, selected, so it can be deleted or kept
+                    if (kept.length) {
+                        map.notes.addObjects('AUTO MAP', kept);
+                        map.notes.selected = kept;
+                    }
+                    editor.toast(kept.length ? `AUTO MAPPING STOPPED - KEPT ${kept.length} NOTES (SELECTED)` : 'AUTO MAPPING STOPPED', 'other', 5);
+                } else {
+                    editor.toast('AUTO MAPPING FAILED', 'error');
+                    app.dialogs.message(`Auto mapping failed: ${err.message}`, 'Error');
+                }
             } finally {
                 autoMapping = false;
             }
@@ -218,7 +259,8 @@
             button(370, 380, 175, 40, 'LEARN FROM MAPS', 27, async () => {
                 const files = await app.pickFile('.sspm,.rhm,.txt,.osu', true);
                 if (files && files.length)
-                    SSQEAutoMapper.learnFiles(files, (text, error) => editor.toast(text, error ? 'error' : 'other'));
+                    // (each map's 'LEARNING...' up until the next, the result for 5 seconds)
+                    SSQEAutoMapper.learnFiles(files, (text, error) => editor.toast(text, error ? 'error' : 'other', /\.\.\.$/.test(text) ? Infinity : 5));
             }),
             // (how much of the map is quantum: 0 none, 100 all of it, in between some parts, tamer the lower)
             AutoMapQuantumLabel,
@@ -493,6 +535,14 @@
         // ------------------------------------------------ main controls
         const CopyButton = button(810, 273, 300, 42, 'COPY MAP DATA', 27, () => app.copyMapData(map));
         const BackButton = button(810, 774, 300, 42, 'BACK TO MENU', 27, () => app.backToMenu());
+        // (web only: under BACK TO MENU while the auto mapper works)
+        const StopAutoMapButton = button(810, 822, 300, 42, 'STOP AUTO MAPPING', 27, () => {
+            if (!autoMapping || !window.SSQEAutoMapper)
+                return;
+            SSQEAutoMapper.stop();
+            editor.toast('STOPPING...', 'other', Infinity);
+        });
+        StopAutoMapButton.visible = false;
 
         const Tempo = slider(1408, 1016, 512, 64, () => map.tempoSlider, v => editor.setTempoSlider(v), 1.4, 0.05, 0.9);
         const Timeline = new SSQE.TimelineSlider(0, 1016, 1344, 64, { style: G.Styles.None, editor });
@@ -528,11 +578,13 @@
             if (top - 117 >= 175) {
                 CopyButton.origin.y = top - 117;
                 BackButton.origin.y = bottom + 84;
+                StopAutoMapButton.origin.y = bottom + 132;
                 ClickModeLabel.origin.y = bottom + 126;
             } else {
                 // too big to fit Copy Map Data above without covering the timeline's labels: stack both buttons below
                 CopyButton.origin.y = bottom + 16;
                 BackButton.origin.y = bottom + 64;
+                StopAutoMapButton.origin.y = bottom + 112;
                 ClickModeLabel.origin.y = bottom + 108;
             }
         }
@@ -560,7 +612,7 @@
         { visible: !!(SSQE.Touch && SSQE.Touch.active) });
         SSQE.Touch && SSQE.Touch.onChange(on => TouchBar.visible = on);
 
-        const controls = [Background, StandardNav, SpecialMapNavs, ConstantNav, CopyButton, BackButton, Tempo,
+        const controls = [Background, StandardNav, SpecialMapNavs, ConstantNav, CopyButton, BackButton, StopAutoMapButton, Tempo,
             Timeline, MusicVolume, SfxVolume, PlayPause, Toast, ZoomLabel, ZoomValueLabel, ClickModeLabel, TempoLabel,
             MusicVolumeLabel, MusicVolumeValueLabel, SfxVolumeLabel, SfxVolumeValueLabel, CurrentTimeLabel, CurrentMsLabel,
             MusicMute, SfxMute, TotalTimeLabel, NotesLabel, TouchBar, Grid, Track];
@@ -578,7 +630,8 @@
 
             ZoomValueLabel.text = `${Math.round(map.zoom * 100)}%`;
             ClickModeLabel.text = `Click: ${editor.clickMode === 'select' ? 'Select' : 'Place'}`;
-            ClickModeLabel.visible = editor.clickMode !== 'both';
+            StopAutoMapButton.visible = autoMapping;
+            ClickModeLabel.visible = editor.clickMode !== 'both' && !autoMapping;
 
             BeatDivisorLabel.text = `Beat Divisor: ${Math.round(map.beatDivisor * 10) / 10 + 1}`;
             SnappingLabel.text = `Quantum Divisor: ${Math.round(s.quantumSnapping + 3)}`;

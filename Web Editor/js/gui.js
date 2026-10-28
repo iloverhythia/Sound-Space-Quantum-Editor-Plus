@@ -1509,25 +1509,33 @@
     class Toast extends Label {
         init() {
             this.time = 2;
+            this.life = 2;
         }
 
-        show(text, color) {
+        // seconds: how long it stays up (2 by default; Infinity: until the next one is shown)
+        show(text, color, seconds = 2) {
+            // (a message replacing one still up, or still sliding in, doesn't slide in again, it just changes: one
+            // after another, like auto mapping's progress, each started sliding in again and was never seen)
+            const up = !!this.text && this.time < this.life - 0.25;
             this.text = text;
             this.textColor = color;
-            this.time = 0;
+            this.life = Math.max(0.75, seconds);
+            this.time = up ? 0.5 : 0;
         }
 
         process(dt) {
-            this.time = Math.min(2, this.time + dt);
+            // (web only: a frame that comes late, after the page was busy (auto mapping, loading a song), counts as
+            // a short one, so a message shown just before it isn't gone by the time it's drawn)
+            this.time = Math.min(this.life, this.time + Math.min(dt, 0.1));
         }
 
         drawText(ctx) {
-            const t = this.time;
+            const t = this.time, end = this.life;
             let offset = 1;
             if (t <= 0.5)
                 offset = Math.sin(t / 0.5 * Math.PI / 2);
-            else if (t >= 1.75)
-                offset = Math.cos((t - 1.75) / 0.25 * Math.PI / 2);
+            else if (t >= end - 0.25)
+                offset = Math.cos((t - (end - 0.25)) / 0.25 * Math.PI / 2);
             this.textAlpha = Math.min(1, Math.pow(Math.max(offset, 0), 3));
             this.yOffset = -offset * this.rect.h;
             if (this.textAlpha > 0.001)

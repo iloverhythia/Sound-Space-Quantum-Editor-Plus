@@ -814,19 +814,19 @@
                 this.dialogs.message('The song is still loading (or couldn\'t be decoded), so its BPM can\'t be detected yet.');
                 return null;
             }
-            editor.toast('DETECTING THE BPM...', 'other');
-            const found = await SSQEAutoMapper.detectBpm(buffer, fromMs, toMs, text => editor.toast(text, 'other')).catch(err => {
+            editor.toast('DETECTING THE BPM...', 'other', Infinity);
+            const found = await SSQEAutoMapper.detectBpm(buffer, fromMs, toMs, text => editor.toast(text, 'other', Infinity)).catch(err => {
                 console.warn(err);
                 return null;
             });
             if (!found) {
-                editor.toast('NO CLEAR BEAT FOUND', 'other');
+                editor.toast('NO CLEAR BEAT FOUND', 'other', 4);
                 this.dialogs.message(toMs > fromMs && toMs - fromMs < 15000
                     ? 'Pick at least 15 seconds of the song to detect its BPM from.'
                     : 'No clear beat could be found in this part of the song. Try a part with drums, or tap it with the BPM Tapper.');
                 return null;
             }
-            editor.toast(`DETECTED ${found.bpm} BPM - OFFSET ${found.offsetMs}MS${found.steady ? '' : ' (THE TEMPO DRIFTS)'}`, 'other');
+            editor.toast(`DETECTED ${found.bpm} BPM - OFFSET ${found.offsetMs}MS${found.steady ? '' : ' (THE TEMPO DRIFTS)'}`, 'other', 5);
             return found;
         }
 
@@ -842,7 +842,7 @@
                     return;
             }
             map.replacePoints('DETECT BPM', map.timingPoints.slice(), [new SSQE.TimingPoint(found.bpm, found.offsetMs)]);
-            editor.toast(`SET BPM TO ${found.bpm} AT ${found.offsetMs}MS`, 'other');
+            editor.toast(`SET BPM TO ${found.bpm} AT ${found.offsetMs}MS`, 'other', 4);
         }
 
         async importIni(map) {
@@ -1050,7 +1050,8 @@
                 if (!this.settings.enableAutosave || !this.editor)
                     return;
                 const map = this.editor.map;
-                if (map.notes.length + map.bookmarks.length + map.timingPoints.length === 0 || this.isSaved({ map }))
+                // (not while the auto mapper is showing the notes it's placing: they aren't the map's yet)
+                if (map.notes.length + map.bookmarks.length + map.timingPoints.length === 0 || this.isSaved({ map }) || map.autoMapPreview)
                     return;
 
                 // the open map is always cached in the browser; maps saved to a folder are also written to their files

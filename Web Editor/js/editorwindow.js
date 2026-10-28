@@ -47,7 +47,10 @@
             checkbox(0, 140, 'Jump on Paste', 26, 'jumpPaste'),
             checkbox(0, 180, 'Pause on Seek', 26, 'pauseScroll'),
             checkbox(0, 220, 'Use Old Quantum Divisor', 26, 'oldQuantumSnap'),
-            button(0, 290, 200, 40, 'Edit Extra Objects', 26, () => setSpecial(true)),
+            // (web only: clicking or dragging on the grid always places notes, also where a note is already showing,
+            // instead of picking that note up; Ctrl or Shift still selects)
+            checkbox(0, 260, 'Place Notes Over Other Notes', 26, 'placeOverNotes'),
+            button(0, 310, 200, 40, 'Edit Extra Objects', 26, () => setSpecial(true)),
         ]);
 
         // ------------------------------------------------ Timing
@@ -196,7 +199,8 @@
             button(0, 430, 175, 40, 'STORE NODES', 27, () => editor.storeNodes()),
             button(185, 430, 175, 40, 'CLEAR NODES', 27, () => editor.clearNodes()),
             checkbox(0, 490, 'Curve Bezier', 27, 'curveBezier'),
-            numberBox(0, 560, 100, 40, { increment: 1, isPositive: true, textSize: 27, bounds: [1, Number.MAX_VALUE], get: () => s.bezierDivisor, set: v => { s.bezierDivisor = v; saveS(); } }),
+            // (decimals too: 2.5 is two notes between nodes, then three, and so on)
+            numberBox(0, 560, 100, 40, { increment: 1, isFloat: true, isPositive: true, textSize: 27, bounds: [0.1, Number.MAX_VALUE], get: () => s.bezierDivisor, set: v => { s.bezierDivisor = v; saveS(); } }),
             button(110, 560, 100, 40, 'DRAW', 27, () => editor.runBezier()),
             label(0, 80, 175, 30, 'Rotate by Degrees:', 30, { centerMode: None }),
             label(0, 160, 100, 30, 'Scale by Percent:', 30, { centerMode: None }),

@@ -107,6 +107,7 @@
         sfxOffset: 0,
         musicOffset: 0,
         bezierDivisor: 4,
+        placeOverNotes: false, // web only: clicks on the grid place notes even where a note is showing
         maxPolyphony: 1,
         rotateBy: 90,
         scaleBy: 150,

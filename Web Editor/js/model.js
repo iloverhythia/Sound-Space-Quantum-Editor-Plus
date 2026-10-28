@@ -932,8 +932,10 @@ const SSQE = window.SSQE = window.SSQE || {};
             const final = [];
             const degree = nodes.length - 1;
 
+            // (web only: the divisor may have decimals: a curve gets that many steps a node on average, rounded over the
+            // whole curve; straight lines alternate whole steps between nodes so they average it, still meeting every node)
             if (curve) {
-                const steps = divisor * degree;
+                const steps = Math.max(1, Math.round(divisor * degree));
                 const deltaMs = nodes[degree].ms - nodes[0].ms;
                 // (web only, for speed: the binomial coefficients once rather than for every point, and the powers of
                 // t and 1 - t built up a step at a time; the same sum)
@@ -962,9 +964,10 @@ const SSQE = window.SSQE = window.SSQE || {};
             } else {
                 for (let p = 0; p < degree; p++) {
                     const a = nodes[p], b = nodes[p + 1];
-                    for (let s = 0; s <= divisor; s++) {
+                    const steps = Math.max(1, Math.round((p + 1) * divisor) - Math.round(p * divisor));
+                    for (let s = 0; s <= steps; s++) {
                         if (s > 0 || p === 0) {
-                            const t = s / divisor;
+                            const t = s / steps;
                             final.push(new Note(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, Math.trunc(a.ms + (b.ms - a.ms) * t)));
                         }
                     }

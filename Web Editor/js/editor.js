@@ -703,7 +703,7 @@
         runBezier() {
             const map = this.map;
             const s = this.settings;
-            const divisor = Math.trunc(s.bezierDivisor + 0.5);
+            const divisor = Math.max(0, +s.bezierDivisor || 0);
             const nodesIdx = map.notes.bezierNodes;
 
             if (divisor > 0 && (nodesIdx.length > 1 || map.notes.selected.length > 1)) {
@@ -845,8 +845,11 @@
         gridMouseDownLeftGlobal() {
             const map = this.map;
             const mode = this.clickMode;
+            // (Place Notes Over Other Notes: a note showing under the mouse is placed over, not picked up, unless Ctrl or
+            // Shift is held to select)
+            const over = this.settings.placeOverNotes && mode === 'both' && !this.keys.ctrl && !this.keys.shift;
 
-            if ((this.hoveringXY === null && mode === 'both') || mode === 'place') {
+            if ((this.hoveringXY === null && mode === 'both') || mode === 'place' || over) {
                 if (!this.renderNotes || this.hoveringCell === null)
                     return;
 
@@ -1482,7 +1485,7 @@
             if (nodes.length > 1) {
                 // (web only, for speed: worked out and drawn again only when the nodes, the divisor, the grid or the
                 // colours change; every other frame it's one picture)
-                const divisor = Math.trunc(s.bezierDivisor + 0.5);
+                const divisor = Math.max(0, +s.bezierDivisor || 0);
                 let key = `${divisor}|${s.curveBezier}|${GRID.x},${GRID.y},${cell},${previewGap},${previewSize}|${s.gridSquircles}|${s.gridSquircleRadius}|${G.pixelRatio}|${s.color2}`;
                 for (const n of nodes)
                     key += `|${n.x},${n.y},${n.ms},${n.anchored ? 1 : 0}`;

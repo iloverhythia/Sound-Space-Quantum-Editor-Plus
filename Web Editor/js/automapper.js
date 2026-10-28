@@ -951,9 +951,10 @@ window.SSQEAutoMapper = (function () {
                     continue;
                 // (the next bar of the phrase being copied, a little preferred; one bar used over and over, a little
                 // less, so a loop that comes round many times isn't all the same bar; and of bars that sound alike,
-                // one with about as many notes as are wanted here)
+                // one with about as many notes as are wanted here, which from 90%, its notes being taken over as they
+                // are, counts for much less than how it sounds)
                 const score = sim + (sb.j === lastJ + 1 ? 0.06 : 0) - 0.03 * (usedCount.get(sb.j) || 0)
-                    - 0.12 * Math.abs(Math.log((sb.notes.length + 1) / (mineCount + 1)));
+                    - ((level >= 0.9 ? 0.05 : 0.12) * Math.abs(Math.log((sb.notes.length + 1) / (mineCount + 1))));
                 if (!best || score > best.score)
                     best = { sb, sim, score };
             }
@@ -973,8 +974,9 @@ window.SSQEAutoMapper = (function () {
             // 80%, anywhere from half as many to twice as many, at 100% a third to three times: a star rating asked
             // for is still met, by taking notes out after); less often the lower the level
             const [lo, hi] = level >= 0.95 ? [0.33, 3] : level >= 0.8 ? [0.5, 2] : [0.65, 1.5];
-            const take = !(opts.count > 0) && !opts.gridFill && level >= 0.35 && Math.random() < Math.min(1, level * 1.25)
-                && pts.length <= hi * mineCount + 1 && pts.length >= lo * mineCount - 1;
+            // (from 90%: every part that sounds like one of yours takes it over as it was, however many notes it has)
+            const take = !(opts.count > 0) && !opts.gridFill && (level >= 0.9 || (level >= 0.35 && Math.random() < Math.min(1, level * 1.25)
+                && pts.length <= hi * mineCount + 1 && pts.length >= lo * mineCount - 1));
             out.push({ from: b.from, to: b.to, sim: best.sim, srcFrom: sb.b.from, srcTo: sb.b.to, pts, take });
         }
         return out;
@@ -4562,8 +4564,9 @@ window.SSQEAutoMapper = (function () {
         const locked = new Uint8Array(times.length);
         const turn = reorienter(times, opts);
         // The best way to turn or mirror a set of points (base: [x, y] for the notes from times[i] on) so it joins on
-        // to the notes before; extra(k): what else each way costs. Null if no way can be played.
-        const fitAt = (base, qi, extra) => {
+        // to the notes before; extra(k): what else each way costs. Null if no way can be played (loose: none is ruled
+        // out, the hard ones just cost more).
+        const fitAt = (base, qi, extra, loose) => {
             const J = jumpAt(times[i]), flow = (opts.runOptions && opts.runOptions.flow) ?? 0.7;
             let best = null;
             for (let k = 0; k < 8; k++) {
@@ -4573,13 +4576,18 @@ window.SSQEAutoMapper = (function () {
                     const [x0, y0] = pos[0];
                     const d0 = Math.hypot(x0 - prev.x, y0 - prev.y), g0 = Math.max(1, times[i] - prev.ms);
                     // never the same spot twice, nor a move too fast or a turn too hard to play
-                    if (d0 < 0.05 || d0 / g0 * 1000 > opts.speedCap)
+                    if (d0 < 0.05 || (!loose && d0 / g0 * 1000 > opts.speedCap))
                         continue;
+                    if (loose && d0 / g0 * 1000 > opts.speedCap)
+                        cost += 8;
                     if (prev2 && prev.ms - prev2.ms >= 3) {
                         const t1 = (prev.ms - prev2.ms) / 1000, t2 = g0 / 1000;
                         const ax = (x0 - prev.x) / t2 - (prev.x - prev2.x) / t1, ay = (y0 - prev.y) / t2 - (prev.y - prev2.y) / t1;
-                        if (Math.hypot(ax, ay) / ((t1 + t2) / 2) > opts.accelCap)
-                            continue;
+                        if (Math.hypot(ax, ay) / ((t1 + t2) / 2) > opts.accelCap) {
+                            if (!loose)
+                                continue;
+                            cost += 8;
+                        }
                         const v1 = [prev.x - prev2.x, prev.y - prev2.y], v2 = [x0 - prev.x, y0 - prev.y];
                         const l1 = Math.hypot(...v1);
                         if (l1 > 0.05)
@@ -4587,8 +4595,11 @@ window.SSQEAutoMapper = (function () {
                     }
                     const want = opts.sizeAt ? opts.sizeAt(i, g0) : J;
                     // (a stream's quick notes join on a cell at a time, not with a skip of two cells)
-                    if (!qi && g0 < 70 && d0 > 1.5 * Math.max(want, 1))
-                        continue;
+                    if (!qi && g0 < 70 && d0 > 1.5 * Math.max(want, 1)) {
+                        if (!loose)
+                            continue;
+                        cost += 8;
+                    }
                     cost += Math.abs(Math.log((d0 + 0.15) / (want + 0.15)));
                 }
                 // (a bar going round a loop comes back mirrored, going round the other way, rather than as more laps)
@@ -4607,18 +4618,27 @@ window.SSQEAutoMapper = (function () {
                 // beyond what flowing maps do, and no snapping straight back at speed unless the notes before were
                 // doing just that (a zigzag of jumps)
                 const T0 = prev && streamTurn(prev2, prev, { x: pos[0][0], y: pos[0][1], ms: times[i] }, qi ? 100 : 160);
-                if (prev && (thereAndBack(prev2, prev, { x: pos[0][0], y: pos[0][1], ms: times[i] }) || (T0 !== null && Math.abs(T0) >= 120)))
-                    continue;
+                if (prev && (thereAndBack(prev2, prev, { x: pos[0][0], y: pos[0][1], ms: times[i] }) || (T0 !== null && Math.abs(T0) >= 120))) {
+                    if (!loose)
+                        continue;
+                    cost += 8;
+                }
                 if (prev && pos.length >= 2) {
                     const P0 = { x: pos[0][0], y: pos[0][1], ms: times[i] }, P1 = { x: pos[1][0], y: pos[1][1], ms: times[i + 1] };
                     const T1 = streamTurn(prev, P0, P1, qi ? 100 : 160);
-                    if (thereAndBack(prev, P0, P1) || (T1 !== null && Math.abs(T1) >= 120))
-                        continue;
+                    if (thereAndBack(prev, P0, P1) || (T1 !== null && Math.abs(T1) >= 120)) {
+                        if (!loose)
+                            continue;
+                        cost += 8;
+                    }
                     const t1 = (P0.ms - prev.ms) / 1000, t2 = (P1.ms - P0.ms) / 1000;
                     if (t1 > 0 && t2 > 0) {
                         const ax = (P1.x - P0.x) / t2 - (P0.x - prev.x) / t1, ay = (P1.y - P0.y) / t2 - (P0.y - prev.y) / t1;
-                        if (Math.hypot(ax, ay) / ((t1 + t2) / 2) > opts.accelCap)
-                            continue;
+                        if (Math.hypot(ax, ay) / ((t1 + t2) / 2) > opts.accelCap) {
+                            if (!loose)
+                                continue;
+                            cost += 8;
+                        }
                     }
                     cost += 3 * flow * Math.max(0, velocityChange(prev, P0, P1) - 0.75);
                     if (prev2) {
@@ -4692,13 +4712,36 @@ window.SSQEAutoMapper = (function () {
         const placeTaken = g => {
             const qi = qAtI(i);
             const phrase = lastTake && Math.abs(lastTake.m.srcTo - g.m.srcFrom) < 30 && lastTake.end === i;
-            const best = fitAt(g.pts.map(pt => [pt.x, pt.y]), qi, k => phrase ? (k === lastTake.k ? -1 : 0.4) : k === 0 ? 0.4 : 0);
-            if (!best || best.cost > 6)
+            // (from 90%: your part as it was, only turned a little: the same way all through a phrase, any way that joins
+            // on, and even as it was if only that flows; and taken over even where it joins on less well)
+            const near = (opts.similarLevel || 0) >= 0.9;
+            const extra = k => phrase ? (k === lastTake.k ? -1 : 0.4) : k === 0 ? (near ? 0.15 : 0.4) : 0;
+            let best = fitAt(g.pts.map(pt => [pt.x, pt.y]), qi, extra);
+            // (from 90%, a part that no way joins on cleanly is still taken over, the way that joins on least badly)
+            if (!best && near)
+                best = fitAt(g.pts.map(pt => [pt.x, pt.y]), qi, extra, true);
+            if (!best || best.cost > (near ? 40 : 6))
                 return false;
+            // (and a quantum part, whose notes aren't on the grid anyway, turned a few degrees more round the middle,
+            // 6 to 15 either way, the same through a phrase, so it's yours but not a copy)
+            let pos = best.pos, theta = 0;
+            if (near && (qi || g.pts.some(pt => !isWhole(pt.x) || !isWhole(pt.y)))) {
+                theta = phrase ? lastTake.theta || 0
+                    : (((Math.imul(Math.round(g.m.srcFrom / 10) + 7, 2654435761) >>> 0) % 1000) / 1000 * 9 + 6) * (g.m.srcFrom % 2 ? 1 : -1) * Math.PI / 180;
+                const c = Math.cos(theta), sn = Math.sin(theta);
+                const turned = pos.map(([x, y]) => [1 + (x - 1) * c - (y - 1) * sn, 1 + (x - 1) * sn + (y - 1) * c]);
+                if (theta && turned.every(([x, y]) => x >= QUANTUM[0] && x <= QUANTUM[1] && y >= QUANTUM[0] && y <= QUANTUM[1]))
+                    pos = turned;
+                else
+                    theta = 0;
+            }
             if (opts.trace)
-                opts.trace.push({ ms: times[i], name: 'similar', k: best.k, len: best.pos.length, from: g.m.srcFrom });
-            for (const [x, y] of best.pos) {
+                opts.trace.push({ ms: times[i], name: 'similar', k: best.k, len: pos.length, from: g.m.srcFrom });
+            for (const [x, y] of pos) {
                 const note = { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, ms: times[i] };
+                // (kept as they are when a star rating is met by taking notes out, see trimToStars)
+                if (near)
+                    note.similar = true;
                 out.push(note);
                 if (barOf[i] >= 0)
                     placedIn[barOf[i]].push(out.length - 1);
@@ -4707,7 +4750,7 @@ window.SSQEAutoMapper = (function () {
                 prev = note;
                 i++;
             }
-            lastTake = { m: g.m, k: best.k, end: i };
+            lastTake = { m: g.m, k: best.k, end: i, theta };
             return true;
         };
         for (const q of takeAt.keys())
@@ -5342,7 +5385,7 @@ window.SSQEAutoMapper = (function () {
                     return (p ? Math.hypot(c.x - p.x, c.y - p.y) / Math.max(15, c.ms - p.ms) : 0) + (q ? Math.hypot(q.x - c.x, q.y - c.y) / Math.max(15, q.ms - c.ms) : 0);
                 };
                 if (best.sr > target)
-                    kept.map((n, i) => [n, speed(kept, i)]).sort((p, q) => q[1] - p[1]).slice(0, tries)
+                    kept.map((n, i) => [n, speed(kept, i)]).filter(([n]) => !n.similar).sort((p, q) => q[1] - p[1]).slice(0, tries)
                         .forEach(([n]) => options.push(kept.filter(m => m !== n)));
                 else
                     out.slice().sort(() => Math.random() - 0.5).slice(0, tries)
@@ -5377,6 +5420,9 @@ window.SSQEAutoMapper = (function () {
             const p = ns[i - 1], c = ns[i], q = ns[i + 1];
             // (back on the spot it just left: only in the last round, when nothing else will do)
             if (Math.hypot(p.x - q.x, p.y - q.y) < 0.05 && round < 3)
+                continue;
+            // (nor a note taken over from the map at Similar to This Map 90% and up: those stay as they were)
+            if (c.similar)
                 continue;
             const g1 = Math.max(15, c.ms - p.ms), g2 = Math.max(15, q.ms - c.ms);
             const v = Math.hypot(c.x - p.x, c.y - p.y) / g1 + Math.hypot(q.x - c.x, q.y - c.y) / g2;
@@ -5996,7 +6042,7 @@ window.SSQEAutoMapper = (function () {
             };
             const trace = opts.trace ? [] : null;
             let notes = await place(times, lib, { ...opts, vmax, speedCap, accelCap, boundaries, runOptions, jumpRunOptions, jumpPart: ctx.jumpPart, yieldNow, trace, bars: ctx.bars, slides, slideSpeed, accents, levelAt, calmAt, sizeAt, fastAt, weakAt: opts.quantum ? null : weakAt, gridSlide, voice,
-                similar, similarBonus: 0.3 + 1.0 * simLevel,
+                similar, similarBonus: 0.3 + 1.0 * simLevel, similarLevel: simLevel,
                 qAt: qParts.length ? qGenAt : null, qRunOptions, qp }, jumpAt);
             if (qParts.some(x => !x.gen))
                 notes = bendCurves(notes, qCurveAt, qLevel, trace);

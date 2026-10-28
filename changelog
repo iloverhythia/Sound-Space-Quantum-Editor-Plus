@@ -2,6 +2,19 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.37 - 10/28/2026 --
+
+- PLACE NOTES OVER OTHER NOTES (OPTIONS tab, web editor): clicking or dragging on the grid always places notes, also
+  where a note further ahead is showing, instead of picking that note up. Mapping behind notes you've already placed
+  no longer selects them. Hold Ctrl or Shift to select as before
+- AUTO MAP LIKE THIS MAP at 90% to 100%: the auto mapper now maps almost entirely with your own patterns. Each bar
+  takes your notes from the part of the map that sounds most like it (matched by sound, not by how many notes it has)
+  and keeps them as you placed them, turned or mirrored so they join on, and quantum parts turned a few degrees more.
+  Parts that join on less cleanly are still taken. In tests at 100%, 744 of 745 notes and 309 of 309 notes came from
+  the map. These notes are never taken out to meet a star rating, so the result can go over the star target
+- BEZIER divisor can have decimals now (e.g. 2.5), for both curved and straight Bezier
+
+----------------------------------
    -- Plus 3.0.36 - 10/24/2026 --
 
 - PLAYBACK SPEED under (or over) 100%, in the editor and the map player: smooth now. The song used to be slowed down

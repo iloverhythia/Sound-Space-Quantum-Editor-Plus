@@ -2,6 +2,16 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.39 - 10/30/2026 --
+
+- APPLY DIVISOR (TIMING tab): moves the selected notes onto the beat divisor you have set, keeping their rhythm.
+  The first note stays where it is and each other note stays as many ticks from it as it was: notes mapped on 4,
+  with the divisor slid to 8, close up to half the gaps (a gap of two ticks stays two ticks); slid to 2, they spread
+  out. The label beside it says what it will do (Divisor 4 to 8). The divisor they were on is the one you had when
+  you selected them, or else the one they all sit on. Works through BPM changes, keeps notes on the same beat
+  together, and is one Ctrl+Z
+
+----------------------------------
    -- Plus 3.0.38 - 10/28/2026 --
 
 - AUTO MAPPING shows the notes as it places them: they appear on the grid and the timeline while it works. Each

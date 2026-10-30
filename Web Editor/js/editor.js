@@ -199,6 +199,95 @@
             return Timing.getCurrentBpm(this.map, ms, draggingPoint);
         }
 
+        // APPLY DIVISOR (TIMING tab, web only): the map's timing as beats counted from the first timing point, across
+        // BPM changes: beatAt(ms) -> beats, msAt(beats) -> ms. Null without a BPM.
+        beatClock() {
+            const pts = this.map.timingPoints.filter(p => p.bpm > 0).slice().sort((p, q) => p.ms - q.ms);
+            if (!pts.length)
+                return null;
+            const start = [0];
+            for (let i = 1; i < pts.length; i++)
+                start.push(start[i - 1] + (pts[i].ms - pts[i - 1].ms) * pts[i - 1].bpm / 60000);
+            const segAtMs = ms => {
+                let i = 0;
+                while (i + 1 < pts.length && pts[i + 1].ms <= ms)
+                    i++;
+                return i;
+            };
+            const segAtBeat = b => {
+                let i = 0;
+                while (i + 1 < pts.length && start[i + 1] <= b + 1e-9)
+                    i++;
+                return i;
+            };
+            return {
+                pts,
+                segAtMs,
+                beatAt: ms => {
+                    const i = segAtMs(ms);
+                    return start[i] + (ms - pts[i].ms) * pts[i].bpm / 60000;
+                },
+                msAt: b => {
+                    const i = segAtBeat(b);
+                    return pts[i].ms + (b - start[i]) * 60000 / pts[i].bpm;
+                },
+            };
+        }
+
+        // The divisor the notes all sit on (each within a couple of milliseconds of a tick of it, counted from its own
+        // timing point), the smallest there is from 1 to 32; 0 if none
+        divisorOf(notes, clock = this.beatClock()) {
+            if (!clock || !notes.length)
+                return 0;
+            const fits = d => notes.every(n => {
+                const p = clock.pts[clock.segAtMs(n.ms)];
+                const tick = 60000 / p.bpm / d, local = (n.ms - p.ms) / tick;
+                return Math.abs(local - Math.round(local)) * tick <= 2.5;
+            });
+            for (let d = 1; d <= 32; d++)
+                if (fits(d))
+                    return d;
+            return 0;
+        }
+
+        // Moves the selected notes from the divisor `from` onto `to`, keeping their rhythm: the first stays where it is
+        // and every other one stays as many ticks from it as it was (notes on 4 put onto 8 close up to half the gaps,
+        // onto 2 they spread out); notes together stay together. One undo. Says what it did, or why it couldn't.
+        applyDivisor(from, to) {
+            const map = this.map, list = map.activeList;
+            const sel = list.selected.filter(o => Number.isFinite(o.ms)).slice().sort((p, q) => p.ms - q.ms);
+            const clock = this.beatClock();
+            if (!clock) {
+                this.toast('SET A BPM FIRST (OPEN BPM SETUP OR DETECT BPM)', 'warn', 4);
+                return false;
+            }
+            if (sel.length < 2) {
+                this.toast('SELECT THE NOTES TO MOVE ONTO THE DIVISOR', 'warn', 4);
+                return false;
+            }
+            if (!(from > 0) || !(to > 0) || Math.abs(from - to) < 1e-9) {
+                this.toast(`ALREADY ON DIVISOR ${to}`, 'other', 3);
+                return false;
+            }
+            const b0 = clock.beatAt(sel[0].ms);
+            const moved = sel.map((o, i) => {
+                const c = o.clone();
+                if (i > 0) {
+                    const ticks = Math.round((clock.beatAt(o.ms) - b0) * from);
+                    // (rounded like a note placed on the beat is: halves to even)
+                    const exact = clock.msAt(b0 + ticks / to);
+                    let ms = Math.round(exact);
+                    if (Math.abs(exact - Math.floor(exact) - 0.5) < 1e-6 && ms % 2)
+                        ms--;
+                    c.ms = Math.max(0, ms);
+                }
+                return c;
+            });
+            list.replace('APPLY DIVISOR', sel, moved);
+            this.toast(`MOVED ${sel.length} NOTES FROM DIVISOR ${from} TO ${to}`, 'other', 3);
+            return true;
+        }
+
         // Timing.Advance
         advance(reverse = false) {
             if (this.currentBpm(this.currentTime).bpm > 0)

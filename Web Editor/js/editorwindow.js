@@ -54,6 +54,30 @@
         ]);
 
         // ------------------------------------------------ Timing
+        // APPLY DIVISOR (web only): the divisor the selected notes are on is the one set when they were selected, or
+        // else the one they all sit on; they're moved onto the one set now (see Editor.applyDivisor)
+        let selSeen = null, divisorAtSelect = 0;
+        const divisorNow = () => Math.round((map.beatDivisor + 1) * 10) / 10;
+        const divisorFrom = () => {
+            const sel = map.activeList.selected;
+            if (sel !== selSeen) {
+                selSeen = sel;
+                divisorAtSelect = divisorNow();
+            }
+            if (sel.length < 2)
+                return 0;
+            const clock = editor.beatClock();
+            if (!clock)
+                return 0;
+            const at = divisorAtSelect;
+            const onIt = sel.every(n => {
+                const p = clock.pts[clock.segAtMs(n.ms)];
+                const tick = 60000 / p.bpm / at, local = (n.ms - p.ms) / tick;
+                return Math.abs(local - Math.round(local)) * tick <= 2.5;
+            });
+            return onIt ? at : editor.divisorOf(sel, clock) || at;
+        };
+        const ApplyDivisorLabel = label(220, 445, 300, 30, '', 26, { centerMode: None });
         const TimingNav = new G.Container(10, 222, 545, 756, [
             numeric(0, 50, 130, 40, 31, () => map.props.exportOffset, v => {
                 SSQE.Formats.setExportOffset(map, Math.trunc(v));
@@ -78,6 +102,12 @@
                 if (text)
                     map.pasteBookmarksText(text);
             }),
+            button(0, 440, 210, 40, 'APPLY DIVISOR', 27, () => {
+                const from = divisorFrom(), to = divisorNow();
+                if (editor.applyDivisor(from || to, to))
+                    divisorAtSelect = to;
+            }),
+            ApplyDivisorLabel,
             label(0, 20, 100, 30, 'Export Offset:', 30, { centerMode: None }),
             label(170, 20, 100, 30, 'SFX Offset:', 30, { centerMode: None }),
             label(340, 20, 100, 30, 'Music Offset:', 30, { centerMode: None }),
@@ -634,6 +664,10 @@
             ClickModeLabel.visible = editor.clickMode !== 'both' && !autoMapping;
 
             BeatDivisorLabel.text = `Beat Divisor: ${Math.round(map.beatDivisor * 10) / 10 + 1}`;
+            if (TimingNav.visible) {
+                const from = divisorFrom(), to = divisorNow();
+                ApplyDivisorLabel.text = map.activeList.selected.length < 2 ? '(select notes)' : from ? `(Divisor ${from} to ${to})` : '(set a BPM)';
+            }
             SnappingLabel.text = `Quantum Divisor: ${Math.round(s.quantumSnapping + 3)}`;
             QuantumXLabel.text = `Quantum X Offset: ${Math.round((s.quantumXOffset - 1) * 100) / 100}`;
             QuantumYLabel.text = `Quantum Y Offset: ${Math.round((s.quantumYOffset - 1) * 100) / 100}`;

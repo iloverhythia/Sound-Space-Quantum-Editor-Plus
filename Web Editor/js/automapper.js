@@ -983,11 +983,12 @@ window.SSQEAutoMapper = (function () {
         let lastJ = -9;
         for (let bj = 0; bj < bars.length; bj++) {
             const b = bars[bj];
-            // (bars wholly inside what's being mapped)
-            if (b.from < opts.startMs - 15 || b.to > opts.endMs + 15)
+            // (bars wholly inside what's being mapped; at 100% the bars it starts or ends partway through too, for
+            // their notes that fall inside)
+            if (level >= 0.99 ? b.to <= opts.startMs + 15 || b.from >= opts.endMs - 15 : b.from < opts.startMs - 15 || b.to > opts.endMs + 15)
                 continue;
             const mine = printOf(bj), loud = loudIn(b.from, b.to);
-            const mineCount = times.filter(t => t >= b.from - 15 && t < b.to - 15).length;
+            const mineCount = times.filter(t => t >= Math.max(b.from, opts.startMs) - 15 && t < Math.min(b.to, opts.endMs) - 15).length;
             let best = null;
             const closest = [];
             for (const sb of sources) {
@@ -4723,7 +4724,7 @@ window.SSQEAutoMapper = (function () {
                     }
                 }
                 if (!best || cost < best.cost)
-                    best = { k, pos, cost };
+                    best = { k, pos, cost, sx, sy };
             }
             return best;
         };
@@ -4780,15 +4781,40 @@ window.SSQEAutoMapper = (function () {
             // (from 90%: your part as it was, only turned a little: the same way all through a phrase, any way that joins
             // on, and even as it was if only that flows; and taken over even where it joins on less well)
             const near = (opts.similarLevel || 0) >= 0.9;
-            const extra = k => phrase ? (k === lastTake.k ? -1 : 0.4) : k === 0 ? (near ? 0.15 : 0.4) : 0;
+            // (at 100%: your part exactly as you placed it, in the same spot; turned, mirrored or moved only where as
+            // it was can't be played on from the note before, and then the rest of that phrase the same way, so the
+            // joins between its bars are still yours)
+            const exact = (opts.similarLevel || 0) >= 0.99;
+            const extra = exact ? k => phrase ? (k === lastTake.k ? 0 : 3) : k === 0 ? 0 : 2.5
+                : k => phrase ? (k === lastTake.k ? -1 : 0.4) : k === 0 ? (near ? 0.15 : 0.4) : 0;
             // (moved across the playfield as well where that joins on better: a cell at a time on the grid, a third of
             // one in quantum parts, a little dearer the further)
             const step = qi ? 1 / 3 : 1, shifts = [];
             for (let dx = -2; dx <= 2; dx++)
                 for (let dy = -2; dy <= 2; dy++)
-                    shifts.push([dx * step, dy * step, 0.35 * Math.hypot(dx, dy)]);
+                    shifts.push([dx * step, dy * step, exact ? (phrase && Math.abs(dx * step - lastTake.sx) < 1e-6 && Math.abs(dy * step - lastTake.sy) < 1e-6 ? 0 : 2 + Math.hypot(dx, dy)) : 0.35 * Math.hypot(dx, dy)]);
+            if (exact)
+                shifts.find(sh => !sh[0] && !sh[1])[2] = phrase && (lastTake.sx || lastTake.sy) ? 2 : 0;
             const base = g.pts.map(pt => [pt.x, pt.y]);
-            let best = fitAt(base, qi, extra, false, shifts, true), loose = false;
+            let best = null, loose = false;
+            // (at 100%, the next bar of a phrase you mapped goes on the way the bar before went: its join onto it is
+            // the one you mapped)
+            if (exact && phrase) {
+                const pos = base.map(([bx, by]) => { const [px, py] = SYM[lastTake.k](bx, by); return [px + lastTake.sx, py + lastTake.sy]; });
+                const [blo, bhi] = qi ? QUANTUM : [0, 2];
+                if (pos.every(([px, py]) => px >= blo - 1e-6 && px <= bhi + 1e-6 && py >= blo - 1e-6 && py <= bhi + 1e-6)
+                    && !(prev && Math.hypot(pos[0][0] - prev.x, pos[0][1] - prev.y) < 0.05))
+                    best = { k: lastTake.k, pos, cost: 0, sx: lastTake.sx, sy: lastTake.sy };
+            }
+            // (and turned or moved only for as long as it has to be: back as you placed it from the first bar that
+            // can be played on that way)
+            if (best && (best.k || best.sx || best.sy)) {
+                const asIs = fitAt(base, qi, k => k ? 1e9 : 0, false, [[0, 0, 0]], true);
+                if (asIs && asIs.k === 0 && asIs.cost < 6)
+                    best = asIs;
+            }
+            if (!best)
+                best = fitAt(base, qi, extra, false, shifts, true);
             // (from 90%, a part that no way joins on cleanly is still taken over, the way that joins on least badly)
             if (!best && near) {
                 best = fitAt(base, qi, extra, true, shifts, true);
@@ -4797,9 +4823,9 @@ window.SSQEAutoMapper = (function () {
             if (!best || best.cost > (near ? 40 : 6))
                 return false;
             // (and a quantum part, whose notes aren't on the grid anyway, turned a few degrees more round the middle,
-            // 6 to 15 either way, the same through a phrase, so it's yours but not a copy)
+            // 6 to 15 either way, the same through a phrase, so it's yours but not a copy; not at 100%)
             let pos = best.pos, theta = 0;
-            if (near && (qi || g.pts.some(pt => !isWhole(pt.x) || !isWhole(pt.y)))) {
+            if (near && !exact && (qi || g.pts.some(pt => !isWhole(pt.x) || !isWhole(pt.y)))) {
                 theta = phrase ? lastTake.theta || 0
                     : (((Math.imul(Math.round(g.m.srcFrom / 10) + 7, 2654435761) >>> 0) % 1000) / 1000 * 9 + 6) * (g.m.srcFrom % 2 ? 1 : -1) * Math.PI / 180;
                 const c = Math.cos(theta), sn = Math.sin(theta);
@@ -4810,7 +4836,7 @@ window.SSQEAutoMapper = (function () {
                     theta = 0;
             }
             if (opts.trace)
-                opts.trace.push({ ms: times[i], name: 'similar', k: best.k, len: pos.length, from: g.m.srcFrom, loose, cost: best.cost });
+                opts.trace.push({ ms: times[i], name: 'similar', k: best.k, len: pos.length, from: g.m.srcFrom, loose, cost: best.cost, sx: best.sx || 0, sy: best.sy || 0 });
             for (const [x, y] of pos) {
                 const note = { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, ms: times[i] };
                 // (kept as they are when a star rating is met by taking notes out, see trimToStars)
@@ -4824,7 +4850,7 @@ window.SSQEAutoMapper = (function () {
                 prev = note;
                 i++;
             }
-            lastTake = { m: g.m, k: best.k, end: i, theta };
+            lastTake = { m: g.m, k: best.k, end: i, theta, sx: best.sx || 0, sy: best.sy || 0 };
             return true;
         };
         for (const q of takeAt.keys())

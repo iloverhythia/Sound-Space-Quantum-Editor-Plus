@@ -2,6 +2,14 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.40 - 11/18/2026 --
+
+- AUTO MAP LIKE THIS MAP at 100% maps your parts as you placed them: the same notes in the same spots, not turned,
+  mirrored or moved across the grid like it did before (that's still what 90% to 99% does). A part is only turned
+  or moved when it can't be played on from the note before as it is, and the next part goes back to how you placed
+  it as soon as it can. The part of a bar you start auto mapping in the middle of is taken from your map too
+
+----------------------------------
    -- Plus 3.0.39 - 10/30/2026 --
 
 - APPLY DIVISOR (TIMING tab): moves the selected notes onto the beat divisor you have set, keeping their rhythm.

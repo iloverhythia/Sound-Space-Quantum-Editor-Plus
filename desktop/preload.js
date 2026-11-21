@@ -33,6 +33,21 @@ contextBridge.exposeInMainWorld('ssqeDesktop', {
     saveMapAs: (name, txt, ini) => ipcRenderer.invoke('ssqe-save-as', { name, txt, ini }),
     saveMapTo: (file, txt, ini) => ipcRenderer.invoke('ssqe-save-to', { file, txt, ini }),
     readIniFor: file => ipcRenderer.invoke('ssqe-read-ini', file),
+    // YOUTUBE LINK: the song of a YouTube video, downloaded by the app: { title, bytes: Uint8Array }; say(text) shows
+    // how it's going
+    youtubeAudio: async (url, say) => {
+        const id = `${Date.now()}-${Math.random()}`;
+        const on = (_, m) => m && m.id === id && say && say(m.text);
+        ipcRenderer.on('ssqe-youtube-progress', on);
+        try {
+            const r = await ipcRenderer.invoke('ssqe-youtube-audio', { url, id });
+            if (r.error)
+                throw new Error(r.error);
+            return r;
+        } finally {
+            ipcRenderer.removeListener('ssqe-youtube-progress', on);
+        }
+    },
     // OPEN EDITOR FOLDER: the folder maps are saved in, in the file manager
     openFolder: () => ipcRenderer.invoke('ssqe-open-folder'),
     // where a file that was opened or dropped is on the computer ('' when it isn't one)

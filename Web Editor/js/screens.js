@@ -372,8 +372,23 @@
     function create(app) {
         const s = app.settings;
         const unc = G.Styles.Checkbox_Uncolored = [[255, 255, 255], [75, 75, 75], [13, 13, 13], [52, 52, 52], [255, 255, 255]];
-        let audioFile = null;
-        const fileLabel = () => audioFile ? audioFile.name : '';
+        let audioFile = null, status = '';
+        const fileLabel = () => status || (audioFile ? audioFile.name : '');
+        // (YOUTUBE LINK: the song of a video, as an MP3, see app.audioFromYoutube; how it's going shows where the
+        // file's name goes)
+        let fetching = false;
+        const fromYoutube = async () => {
+            if (fetching)
+                return;
+            fetching = true;
+            try {
+                const f = await app.audioFromYoutube(text => status = text);
+                if (f)
+                    audioFile = f;
+            } finally {
+                fetching = false;
+            }
+        };
         const choose = async () => {
             const f = await app.pickFile('audio/*,.asset,.mp3,.ogg,.wav,.flac,.m4a,.opus');
             if (f)
@@ -414,10 +429,15 @@
         const controls = [
             background(),
             new G.Container(0, 0, 1920, 1080, [
+                new G.Button(750, 635, 420, 50, { text: 'YOUTUBE LINK', textSize: 34, onLeftClick: fromYoutube }),
                 new G.Button(750, 705, 420, 50, {
                     text: 'CREATE MAP', textSize: 38, onLeftClick: async () => {
+                        if (fetching) {
+                            app.dialogs.message('Still getting the song from YouTube - one moment.');
+                            return;
+                        }
                         if (!audioFile) {
-                            app.dialogs.message('Choose an audio file first.');
+                            app.dialogs.message('Choose an audio file (or paste a YouTube link) first.');
                             return;
                         }
                         let id = SSQE.Formats.fixId(audioFile.name.replace(/\.[^.]*$/, ''));

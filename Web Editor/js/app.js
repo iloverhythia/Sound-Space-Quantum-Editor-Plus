@@ -1257,6 +1257,86 @@
             this.dialogs.message('The web editor keeps its maps and audio in your browser, so there is no editor folder to open. (The desktop app opens the folder your maps are saved in.)');
         }
 
+        // An AudioBuffer encoded as an MP3 (192 kbps, with LAME: vendor/lame.min.js, loaded the first time it's
+        // needed); progress(percent) every so often
+        async encodeMp3(buffer, progress = () => { }) {
+            if (!window.lamejs)
+                await new Promise((resolve, reject) => {
+                    const tag = document.createElement('script');
+                    tag.src = 'js/vendor/lame.min.js';
+                    tag.onload = resolve;
+                    tag.onerror = () => reject(new Error('The MP3 encoder could not be loaded.'));
+                    document.head.append(tag);
+                });
+            // (LAME takes 32, 44.1 or 48 kHz at most: anything else is resampled to 44.1)
+            let src = buffer;
+            if (![32000, 44100, 48000].includes(src.sampleRate)) {
+                const ctx = new OfflineAudioContext(Math.min(2, src.numberOfChannels), Math.ceil(src.duration * 44100), 44100);
+                const node = ctx.createBufferSource();
+                node.buffer = src;
+                node.connect(ctx.destination);
+                node.start();
+                src = await ctx.startRendering();
+            }
+            const channels = Math.min(2, src.numberOfChannels);
+            const encoder = new lamejs.Mp3Encoder(channels, src.sampleRate, 192);
+            const toInt = data => {
+                const out = new Int16Array(data.length);
+                for (let i = 0; i < data.length; i++)
+                    out[i] = Math.max(-32768, Math.min(32767, Math.round(data[i] * 32767)));
+                return out;
+            };
+            const left = toInt(src.getChannelData(0)), right = channels > 1 ? toInt(src.getChannelData(1)) : null;
+            const parts = [];
+            const STEP = 1152 * 40;
+            let last = performance.now();
+            for (let i = 0; i < left.length; i += STEP) {
+                const l = left.subarray(i, i + STEP);
+                const chunk = right ? encoder.encodeBuffer(l, right.subarray(i, i + STEP)) : encoder.encodeBuffer(l);
+                if (chunk.length)
+                    parts.push(new Uint8Array(chunk));
+                // (a moment for the page every so often, with how far it's got)
+                if (performance.now() - last > 40) {
+                    progress(Math.floor(i / left.length * 100));
+                    await new Promise(r => setTimeout(r));
+                    last = performance.now();
+                }
+            }
+            const end = encoder.flush();
+            if (end.length)
+                parts.push(new Uint8Array(end));
+            return new Blob(parts, { type: 'audio/mpeg' });
+        }
+
+        // YOUTUBE LINK (desktop app): the song of a YouTube video, downloaded by the app (with yt-dlp, see the desktop
+        // app's main.js) and converted to an MP3 so every game it's exported for can play it. say(text) shows how it's
+        // going. The file, or null (cancelled, or it couldn't be got: said why)
+        async audioFromYoutube(say = () => { }) {
+            if (!window.ssqeDesktop || !ssqeDesktop.youtubeAudio) {
+                this.dialogs.message('Getting a song from a YouTube link only works in the desktop app (a web page isn\'t allowed to download from YouTube). Download the desktop app from the GitHub releases page, or choose an audio file instead.');
+                return null;
+            }
+            const link = await this.dialogs.prompt('YouTube Link', 'Paste the link of the YouTube video whose song you want to map:', '');
+            if (!link || !link.trim())
+                return null;
+            try {
+                say('GETTING THE SONG...');
+                const got = await ssqeDesktop.youtubeAudio(link.trim(), say);
+                say('CONVERTING TO MP3...');
+                const ctx = new OfflineAudioContext(1, 1, 44100);
+                const buffer = await ctx.decodeAudioData(got.bytes.buffer.slice(got.bytes.byteOffset, got.bytes.byteOffset + got.bytes.byteLength));
+                const blob = await this.encodeMp3(buffer, pct => say(`CONVERTING TO MP3 ${pct}%`));
+                const name = (got.title || 'youtube').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || 'youtube';
+                return new File([blob], `${name}.mp3`, { type: 'audio/mpeg' });
+            } catch (e) {
+                console.warn(e);
+                this.dialogs.message(`Couldn't get the song from that link: ${e.message}`, 'Error');
+                return null;
+            } finally {
+                say('');
+            }
+        }
+
         // CONVERT TO MP3 (MusicPlayer.ConvertToMP3): the map's song encoded as an MP3 (192 kbps, with LAME: vendor/
         // lame.min.js, loaded the first time it's needed), replacing the audio the map keeps
         async convertToMp3(editor) {
@@ -1276,52 +1356,7 @@
             if (editor.music.isPlaying)
                 editor.pauseMusic();
             try {
-                if (!window.lamejs)
-                    await new Promise((resolve, reject) => {
-                        const tag = document.createElement('script');
-                        tag.src = 'js/vendor/lame.min.js';
-                        tag.onload = resolve;
-                        tag.onerror = () => reject(new Error('The MP3 encoder could not be loaded.'));
-                        document.head.append(tag);
-                    });
-                // (LAME takes 32, 44.1 or 48 kHz at most: anything else is resampled to 44.1)
-                let src = buffer;
-                if (![32000, 44100, 48000].includes(src.sampleRate)) {
-                    const ctx = new OfflineAudioContext(Math.min(2, src.numberOfChannels), Math.ceil(src.duration * 44100), 44100);
-                    const node = ctx.createBufferSource();
-                    node.buffer = src;
-                    node.connect(ctx.destination);
-                    node.start();
-                    src = await ctx.startRendering();
-                }
-                const channels = Math.min(2, src.numberOfChannels);
-                const encoder = new lamejs.Mp3Encoder(channels, src.sampleRate, 192);
-                const toInt = data => {
-                    const out = new Int16Array(data.length);
-                    for (let i = 0; i < data.length; i++)
-                        out[i] = Math.max(-32768, Math.min(32767, Math.round(data[i] * 32767)));
-                    return out;
-                };
-                const left = toInt(src.getChannelData(0)), right = channels > 1 ? toInt(src.getChannelData(1)) : null;
-                const parts = [];
-                const STEP = 1152 * 40;
-                let last = performance.now();
-                for (let i = 0; i < left.length; i += STEP) {
-                    const l = left.subarray(i, i + STEP);
-                    const chunk = right ? encoder.encodeBuffer(l, right.subarray(i, i + STEP)) : encoder.encodeBuffer(l);
-                    if (chunk.length)
-                        parts.push(new Uint8Array(chunk));
-                    // (a moment for the page every so often, with how far it's got)
-                    if (performance.now() - last > 40) {
-                        editor.toast(`CONVERTING TO MP3 ${Math.floor(i / left.length * 100)}%`, 'other');
-                        await new Promise(r => setTimeout(r));
-                        last = performance.now();
-                    }
-                }
-                const end = encoder.flush();
-                if (end.length)
-                    parts.push(new Uint8Array(end));
-                const blob = new Blob(parts, { type: 'audio/mpeg' });
+                const blob = await this.encodeMp3(buffer, pct => editor.toast(`CONVERTING TO MP3 ${pct}%`, 'other'));
                 await this.storage.putAudio(map.soundId, blob);
                 await this.music.load(blob);
                 map.duration = this.music.duration * 1000;

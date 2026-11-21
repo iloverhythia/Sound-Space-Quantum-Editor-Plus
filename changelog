@@ -2,6 +2,15 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.41 - 11/21/2026 --
+
+- YOUTUBE LINK (Create Map screen, desktop app): paste a YouTube video's link and its song is downloaded and
+  converted to an MP3, ready to map: then CREATE MAP as with an audio file. The first time, the app downloads
+  yt-dlp (the free YouTube downloader it uses) into its data folder, and gets the newest one again when a download
+  fails. The web editor can't download from YouTube (browsers don't allow it), so there it says to use the
+  desktop app
+
+----------------------------------
    -- Plus 3.0.40 - 11/18/2026 --
 
 - AUTO MAP LIKE THIS MAP at 100% maps your parts as you placed them: the same notes in the same spots, not turned,

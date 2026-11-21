@@ -394,6 +394,142 @@ function prefs() {
     }
 }
 
+// YOUTUBE LINK (the create map screen): the song of a YouTube video, downloaded with yt-dlp (github.com/yt-dlp/yt-dlp).
+// yt-dlp isn't part of the app: it's fetched into the app's data folder the first time it's needed, and fetched
+// again when a download fails (YouTube changes often, and yt-dlp is updated to keep up). Only the audio is
+// downloaded, as the video has it (Opus in WebM where there is one: no ffmpeg needed); the editor converts it to an
+// MP3. The app itself runs the JavaScript yt-dlp needs for YouTube (as Node, ELECTRON_RUN_AS_NODE), so nothing else
+// has to be installed.
+const YTDLP_ASSET = { win32: 'yt-dlp.exe', darwin: 'yt-dlp_macos', linux: process.arch === 'arm64' ? 'yt-dlp_linux_aarch64' : 'yt-dlp_linux' };
+const ytdlpFile = () => path.join(app.getPath('userData'), 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+const isYoutube = url => {
+    try {
+        const u = new URL(url);
+        return /^https?:$/.test(u.protocol) && /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/i.test(u.hostname);
+    } catch {
+        return false;
+    }
+};
+async function fetchYtdlp(say) {
+    const asset = YTDLP_ASSET[process.platform];
+    if (!asset)
+        throw new Error('YouTube links aren\'t supported on this system.');
+    const file = ytdlpFile(), part = `${file}.download`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const res = await net.fetch(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`);
+    if (!res.ok || !res.body)
+        throw new Error(`yt-dlp (the YouTube downloader) couldn't be downloaded (${res.status}).`);
+    const total = Number(res.headers.get('content-length')) || 0;
+    const out = fs.createWriteStream(part);
+    let done = 0, shown = -1;
+    for await (const chunk of res.body) {
+        done += chunk.length;
+        if (!out.write(chunk))
+            await new Promise(r => out.once('drain', r));
+        const pct = total ? Math.floor(done / total * 100) : -1;
+        if (pct !== shown) {
+            shown = pct;
+            say(`GETTING THE YOUTUBE DOWNLOADER${pct >= 0 ? ` ${pct}%` : '...'}`);
+        }
+    }
+    await new Promise((resolve, reject) => out.end(err => err ? reject(err) : resolve()));
+    if (total && done < total)
+        throw new Error('yt-dlp (the YouTube downloader) didn\'t download completely.');
+    fs.renameSync(part, file);
+    if (process.platform !== 'win32')
+        fs.chmodSync(file, 0o755);
+}
+function runYtdlp(url, dir, say) {
+    return new Promise((resolve, reject) => {
+        const args = ['--no-playlist', '--no-warnings', '--no-mtime', '--no-part', '--no-cache-dir',
+            '-f', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+            '--js-runtimes', `node:${process.execPath}`,
+            '-o', path.join(dir, 'audio.%(ext)s'),
+            '--print', 'after_move:title:%(title)s',
+            '--progress', '--newline', '--progress-template', 'download:progress:%(progress._percent_str)s',
+            '--', url];
+        const child = spawn(ytdlpFile(), args, { cwd: dir, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+        let title = '', err = '', buf = '';
+        const line = text => {
+            const t = text.trim();
+            if (t.startsWith('title:'))
+                title = t.slice(6);
+            else if (t.startsWith('progress:')) {
+                const pct = parseFloat(t.slice(9));
+                if (Number.isFinite(pct))
+                    say(`DOWNLOADING THE SONG ${Math.floor(pct)}%`);
+            }
+        };
+        // (progress comes on stderr, as yt-dlp keeps stdout for what --print asks for; the title on stdout)
+        let ebuf = '';
+        child.stdout.on('data', d => {
+            buf += d;
+            const lines = buf.split(/\r?\n|\r/);
+            buf = lines.pop();
+            lines.forEach(line);
+        });
+        child.stderr.on('data', d => {
+            ebuf += d;
+            const lines = ebuf.split(/\r?\n|\r/);
+            ebuf = lines.pop();
+            for (const l of lines)
+                if (l.trim().startsWith('progress:'))
+                    line(l);
+                else
+                    err = (err + l + '\n').slice(-4000);
+        });
+        child.on('error', reject);
+        child.on('close', code => {
+            line(buf);
+            err += ebuf;
+            const got = fs.readdirSync(dir).find(f => f.startsWith('audio.'));
+            if (code === 0 && got)
+                resolve({ title, file: path.join(dir, got) });
+            else {
+                const msg = (err.split(/\r?\n/).filter(l => /ERROR/.test(l)).pop() || err.trim().split(/\r?\n/).pop() || `yt-dlp stopped (${code})`)
+                    .replace(/^ERROR:\s*/, '');
+                reject(new Error(msg));
+            }
+        });
+    });
+}
+ipcMain.handle('ssqe-youtube-audio', async (event, { url, id }) => {
+    const say = text => {
+        if (!event.sender.isDestroyed())
+            event.sender.send('ssqe-youtube-progress', { id, text });
+    };
+    if (!isYoutube(String(url || '')))
+        return { error: 'That doesn\'t look like a YouTube link (it should start with https://www.youtube.com/ or https://youtu.be/).' };
+    const dir = fs.mkdtempSync(path.join(app.getPath('temp'), 'ssqe-youtube-'));
+    try {
+        let fresh = false;
+        if (!fs.existsSync(ytdlpFile())) {
+            await fetchYtdlp(say);
+            fresh = true;
+        }
+        let got;
+        try {
+            say('FINDING THE SONG...');
+            got = await runYtdlp(url, dir, say);
+        } catch (err) {
+            // (an old yt-dlp that YouTube has changed since: the newest, and once more; not when it was fetched in
+            // the last 12 hours, as then it's the link: a private or removed video, say)
+            if (fresh || Date.now() - fs.statSync(ytdlpFile()).mtimeMs < 12 * 3600e3)
+                throw err;
+            for (const f of fs.readdirSync(dir))
+                fs.rmSync(path.join(dir, f), { force: true });
+            await fetchYtdlp(say);
+            say('FINDING THE SONG...');
+            got = await runYtdlp(url, dir, say);
+        }
+        return { title: got.title, bytes: new Uint8Array(fs.readFileSync(got.file)) };
+    } catch (err) {
+        return { error: String(err && err.message || err) };
+    } finally {
+        fs.rm(dir, { recursive: true, force: true }, () => { });
+    }
+});
+
 // CALCULATE SR/RP: the map goes to Rhythia's star rating service, as the original editor sends it, from here rather
 // than from the page (where the browser's cross-site rules could stop the answer being read)
 ipcMain.handle('ssqe-star-rating', async (_, body) => {

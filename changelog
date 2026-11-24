@@ -2,6 +2,14 @@
 NOTICE: You are advised not to use Rhythia Online for uploading SSPM files as you cannot delete maps (nor do they accept valid GDPR data removal requests to do so).
 
 ----------------------------------
+   -- Plus 3.0.42 - 11/24/2026 --
+
+- Exporting an SSPM (or RHM) names the map like the original editor again: the Map ID is made from the mapper(s)
+  and song name (e.g. "mapper_-_artist_-_song"), and changes as you type them, rather than being the audio file's
+  ID. With no song name it's "Untitled Song", and with no mappers "None". PHXM exports also use every mapper in
+  the map's ID and file name, like the original
+
+----------------------------------
    -- Plus 3.0.41 - 11/21/2026 --
 
 - YOUTUBE LINK (Create Map screen, desktop app): paste a YouTube video's link and its song is downloaded and

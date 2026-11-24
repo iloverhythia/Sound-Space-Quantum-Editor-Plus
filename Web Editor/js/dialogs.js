@@ -646,7 +646,7 @@
             const p = map.props;
             const X = 12, Y = 12;
 
-            const idBox = aBox(X + 84, Y, 236, 20, map.soundId, 'readonly dark');
+            const idBox = aBox(X + 84, Y, 236, 20, '', 'readonly dark');
             idBox.readOnly = true;
             const nameBox = aBox(X + 84, Y + 25, 236, 20, p.songName);
             const diffBox = at(el('select', { class: 'av-combo' }, DIFFICULTIES.map(d => el('option', { value: d }, d))), X + 84, Y + 50, 236, 20);
@@ -654,6 +654,16 @@
             const customBox = aBox(X + 184, Y + 74, 136, 20, p.customDifficulty);
             const mapperBox = at(el('textarea', { class: 'av-textbox', spellcheck: 'false' }), X + 84, Y + 99, 236, 130);
             mapperBox.value = p.mappers;
+            // ExportSSPM.CreateID: the map ID is made from the mapper(s) and song name, and follows them as they're typed
+            const songName = () => nameBox.value.trim() ? nameBox.value : 'Untitled Song';
+            const mapperList = () => {
+                const list = mapperBox.value.split('\n').map(m => m.replace(/\r/g, '')).filter(m => m.trim());
+                return list.length ? list : ['None'];
+            };
+            const createId = () => idBox.value = SSQE.Formats.fixId(`${mapperList().join(' ')} - ${songName()}`);
+            nameBox.addEventListener('input', createId);
+            mapperBox.addEventListener('input', createId);
+            createId();
             let coverFile = null;
             const coverBox = aBox(X + 84, Y + 236.5, 176, 25, map.coverBytes ? 'Loaded map cover' : 'Default', 'readonly dark');
             coverBox.readOnly = true;
@@ -697,12 +707,12 @@
                     return;
                 }
 
-                const id = SSQE.Formats.fixId(map.soundId);
-                const mappers = mapperBox.value.split('\n').map(m => m.trim()).filter(Boolean);
+                createId();
+                const id = idBox.value;
                 const meta = {
                     songId: id,
-                    mapName: nameBox.value,
-                    mappers: (mappers.length ? mappers : ['None']).join('\n'),
+                    mapName: songName(),
+                    mappers: mapperList().join('\n'),
                     difficulty: diffBox.value,
                     customDifficulty: customBox.value,
                 };
@@ -710,7 +720,6 @@
                 let bytes;
                 if (format === 'rhm') {
                     meta.duration = (editor.music && editor.music.duration || 0) * 1000;
-                    meta.mapName = meta.mapName || p.songTitle || map.soundId;
                     // Rhythia always looks for a cover in the .rhm
                     if (!cover)
                         cover = await fetch('assets/Cover.png').then(r => r.ok ? r.arrayBuffer() : null).then(b => b && new Uint8Array(b)).catch(() => null);
@@ -810,7 +819,7 @@
                 };
                 try {
                     const bytes = await SSQE.Formats.writePhxm(map, meta, audio, cover);
-                    const id = SSQE.Formats.fixId(`${meta.mappers.split('\n')[0]} - ${title} - ${meta.artist}`);
+                    const id = SSQE.Formats.fixId(`${meta.mappers} - ${title} - ${meta.artist}`);
                     this.app.download(new Blob([bytes], { type: 'application/octet-stream' }), `${id}.phxm`);
                     window.SSQEStats && SSQEStats.add('mapsExported');
                     win.close();

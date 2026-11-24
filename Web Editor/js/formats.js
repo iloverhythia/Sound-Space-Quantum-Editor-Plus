@@ -868,7 +868,7 @@
         const json = {
             Artist: meta.artist || '', AudioExt: ext, Difficulty: Math.max(0, DIFFICULTIES.indexOf(meta.difficulty)),
             DifficultyName: meta.customDifficulty || meta.difficulty || 'N/A', HasAudio: true, HasCover: !!cover, HasVideo: false,
-            ID: fixId(`${meta.mappers.split('\n')[0] || 'None'} - ${meta.artist || ''} - ${meta.title || ''}`),
+            ID: fixId(`${meta.mappers || 'None'} - ${meta.artist || ''} - ${meta.title || ''}`),
             Mappers: meta.mappers.split('\n'), Rating: +meta.rating || 0, Title: meta.title || '',
             ArtistLink: meta.artistLink || '', ArtistPlatform: meta.artistPlatform || '', Length: Math.round(meta.duration || 0),
         };
